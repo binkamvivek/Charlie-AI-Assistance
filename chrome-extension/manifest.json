@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Charlie Activity Monitor",
+  "version": "1.0",
+  "description": "Monitors browsing keywords, YouTube topics, and search queries for Charlie AI Assistant.",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Charlie AI Assistant Monitor"
+  }
+}

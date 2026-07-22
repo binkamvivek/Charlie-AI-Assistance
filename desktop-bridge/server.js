@@ -29,9 +29,12 @@ function getLaunchCommand(appName) {
 
   if (process.platform === 'win32') {
     const safeName = appName.replace(/'/g, "''");
-    // Strategy: use PowerShell Get-StartApps to find the app by name,
-    // then launch via explorer shell:AppsFolder (works for all UWP/Store apps)
-    return `powershell -NoProfile -Command "$app = Get-StartApps | Where-Object { $_.Name -like '*${safeName}*' } | Select-Object -First 1; if ($app) { Start-Process $app.AppId } else { Start-Process '${safeName}' -ErrorAction SilentlyContinue; if (-not $?) { throw 'Could not find or launch: ${safeName}' } }"`;
+    // Use PowerShell with Base64-encoded command to avoid all quoting issues
+    // Get-StartApps returns full AUMID (e.g. 5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App)
+    // Use explorer.exe shell:AppsFolder\AUMID to launch
+    const script = `$app = Get-StartApps | Where-Object { $_.Name -like '*${safeName}*' } | Select-Object -First 1; if ($app) { explorer.exe ('shell:AppsFolder\\' + $app.AppId) } else { Start-Process -FilePath '${safeName}' -ErrorAction SilentlyContinue; if (-not $?) { Write-Error 'App not found: ${safeName}' } }`;
+    const bytes = Buffer.from(script, 'utf16le').toString('base64');
+    return `powershell -NoProfile -EncodedCommand ${bytes}`;
   }
 
   return `open -a "${appName}"`;
@@ -99,6 +102,56 @@ app.post('/execute', (req, res) => {
         uptime: `${Math.round(os.uptime() / 60)} minutes`
       }
     });
+  }
+
+  // WhatsApp Send Message — uses wa.me URI then auto-presses Enter to send
+  if (command === 'send_whatsapp') {
+    const { phone, message } = req.body;
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Phone number is required' });
+    }
+
+    // Strip any non-digit characters from phone (keep +)
+    const cleanPhone = phone.replace(/[^\d+]/g, '');
+    const encodedMsg = encodeURIComponent(message || '');
+    const waUrl = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
+
+    console.log(`[Bridge] Sending WhatsApp to ${cleanPhone}: ${message}`);
+
+    if (process.platform === 'win32') {
+      // Use PowerShell to:
+      // 1. Open wa.me URL (pre-fills the message)
+      // 2. Wait 5 seconds for WhatsApp Web/Desktop to load
+      // 3. Bring the WhatsApp/chrome window to foreground
+      // 4. Simulate pressing Enter to auto-send
+      const psScript = `
+Start-Process "${waUrl}"
+Start-Sleep -Seconds 5
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      `.trim();
+
+      const bytes = Buffer.from(psScript, 'utf16le').toString('base64');
+      const cmd = `powershell -NoProfile -EncodedCommand ${bytes}`;
+
+      exec(cmd, { timeout: 20000 }, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`[Bridge] WhatsApp send failed: ${error.message}`);
+          return res.status(500).json({ success: false, error: error.message });
+        }
+        console.log(`[Bridge] WhatsApp message sent to ${cleanPhone}`);
+        return res.json({ success: true, message: `WhatsApp message sent to ${cleanPhone}` });
+      });
+    } else {
+      // macOS/Linux — just open the URL (cannot auto-send easily)
+      exec(`open "${waUrl}"`, (error) => {
+        if (error) {
+          return res.status(500).json({ success: false, error: error.message });
+        }
+        return res.json({ success: true, message: `WhatsApp opened for ${cleanPhone} (press Enter to send)` });
+      });
+    }
+    return;
   }
 
   // Fallback direct command execution for supported safe actions

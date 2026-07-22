@@ -2,7 +2,7 @@ import React from 'react';
 import { Compass, ShoppingBag, BookOpen, TrendingUp, ArrowUpRight } from 'lucide-react';
 
 export default function DiscoveryFeed({ topics = [] }) {
-  const userInterests = topics.length > 0 ? topics : ['TypeScript', 'Gemini AI', 'Tailwind CSS', 'Astro Framework'];
+  const userInterests = topics.length > 0 ? topics : ['TypeScript', 'Local Intent Engine', 'Tailwind CSS', 'Astro Framework'];
 
   const discoveryItems = [
     {
@@ -18,8 +18,8 @@ export default function DiscoveryFeed({ topics = [] }) {
       icon: TrendingUp,
       color: 'text-purple-400',
       bg: 'bg-purple-500-10 border-purple-500-20',
-      title: 'Gemini 2.5 & 3.6 Multimodal Function Calling API',
-      source: 'Google AI Cloud'
+      title: 'Zero-Cost Local Intent Recognition & Pattern Engine',
+      source: 'Internal Engine'
     },
     {
       type: 'Product Discovery',

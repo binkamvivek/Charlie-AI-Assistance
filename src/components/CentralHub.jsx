@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Send, Sparkles, Volume2, VolumeX, Activity } from 'lucide-react';
+import { Mic, MicOff, Send, Sparkles, Volume2, VolumeX, Activity, ExternalLink } from 'lucide-react';
 
-export default function CentralHub({ onSendMessage, status, currentResponse, ttsEnabled, setTtsEnabled }) {
+export default function CentralHub({ onSendMessage, status, currentResponse, cardPayload, ttsEnabled, setTtsEnabled }) {
   const [inputText, setInputText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const canvasRef = useRef(null);
@@ -87,10 +87,10 @@ export default function CentralHub({ onSendMessage, status, currentResponse, tts
 
       ctx.beginPath();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = isListening ? '#ec4899' : status.includes('Thinking') ? '#c084fc' : '#38bdf8';
+      ctx.strokeStyle = isListening ? '#ec4899' : status.includes('Executing') ? '#c084fc' : '#38bdf8';
 
       for (let x = 0; x < width; x++) {
-        const amplitude = isListening ? 15 : status.includes('Thinking') ? 10 : 4;
+        const amplitude = isListening ? 15 : status.includes('Executing') ? 10 : 4;
         const frequency = 0.05;
         const y = centerY + Math.sin(x * frequency + phase) * amplitude * Math.sin((x / width) * Math.PI);
         if (x === 0) ctx.moveTo(x, y);
@@ -166,7 +166,7 @@ export default function CentralHub({ onSendMessage, status, currentResponse, tts
       <div className="my-6 flex flex-col items-center gap-4">
         <div
           onClick={toggleListening}
-          className={`glow-orb ${isListening ? 'listening' : status.includes('Thinking') ? 'thinking' : ''}`}
+          className={`glow-orb ${isListening ? 'listening' : status.includes('Executing') ? 'thinking' : ''}`}
           title={isListening ? 'Click to stop listening' : 'Click to speak to Charlie'}
         >
           {isListening ? (
@@ -185,9 +185,35 @@ export default function CentralHub({ onSendMessage, status, currentResponse, tts
 
       {/* Response Box */}
       {currentResponse && (
-        <div className="w-full mb-4 p-4 rounded-xl bg-slate-950-80 border border-slate-800 text-sm text-slate-200 flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-sky-400 shrink-0 mt-0-5" />
-          <div className="font-sans">{currentResponse}</div>
+        <div className="w-full mb-4 p-4 rounded-xl bg-slate-950-80 border border-slate-800 text-sm text-slate-200 flex flex-col gap-3">
+          <div className="flex items-start gap-3">
+            <Sparkles className="w-5 h-5 text-sky-400 shrink-0 mt-0-5" />
+            <div className="font-sans">{currentResponse}</div>
+          </div>
+
+          {/* Dynamic Generated Web Search / YouTube Cards */}
+          {cardPayload && (
+            <div className="mt-1 grid grid-cols-1 sm-grid-cols-2 gap-2 pt-3 border-t border-slate-800">
+              <a
+                href={cardPayload.googleUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2-5 rounded-lg bg-sky-500-10 border border-sky-500-30 hover-border-sky-400 transition-all flex items-center justify-between text-xs text-sky-300 font-mono"
+              >
+                <span>🌐 Search Google: "{cardPayload.query}"</span>
+                <ExternalLink className="w-3-5 h-3-5" />
+              </a>
+              <a
+                href={cardPayload.youtubeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2-5 rounded-lg bg-red-500-10 border border-red-500-30 hover-border-red-400 transition-all flex items-center justify-between text-xs text-red-300 font-mono"
+              >
+                <span>📺 Search YouTube: "{cardPayload.query}"</span>
+                <ExternalLink className="w-3-5 h-3-5" />
+              </a>
+            </div>
+          )}
         </div>
       )}
 
@@ -197,7 +223,7 @@ export default function CentralHub({ onSendMessage, status, currentResponse, tts
           type="text"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          placeholder={isListening ? 'Speak now... (voice input appears here)' : "Ask Charlie or type command (e.g., 'Open terminal', 'Save my favorite language as Rust')..."}
+          placeholder={isListening ? 'Speak now... (voice input appears here)' : "Ask Charlie or type command (e.g., 'Open terminal', 'My name is Alex')..."}
           className="w-full bg-slate-950-90 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus-outline-none border-sky-500-50 font-sans"
         />
         <button

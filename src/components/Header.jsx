@@ -12,9 +12,9 @@ export default function Header({ bridgeStatus, memorySynced, onOpenSettings }) {
         </div>
         <div>
           <h1 className="text-lg font-bold tracking-tight text-white">
-            Charlie AI Assistant
+            Charlie AI Assistance
           </h1>
-          <p className="text-xs text-slate-400 font-mono">Personalized AI Operating Canvas</p>
+          <p className="text-xs text-slate-400 font-mono">Zero-Cost Local Command Canvas</p>
         </div>
       </div>
 

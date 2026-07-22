@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Key, Database, Server, Save, Check } from 'lucide-react';
+import { X, Database, Server, Save, Check } from 'lucide-react';
 
 export default function SettingsModal({ isOpen, onClose, onSave }) {
-  const [geminiKey, setGeminiKey] = useState('');
   const [webAppUrl, setWebAppUrl] = useState('');
   const [bridgeUrl, setBridgeUrl] = useState('http://localhost:3001');
   const [savedStatus, setSavedStatus] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setGeminiKey(localStorage.getItem('charlie_gemini_api_key') || '');
       setWebAppUrl(localStorage.getItem('charlie_web_app_url') || '');
       setBridgeUrl(localStorage.getItem('charlie_bridge_url') || 'http://localhost:3001');
     }
@@ -20,7 +18,6 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   const handleSave = (e) => {
     e.preventDefault();
     if (typeof window !== 'undefined') {
-      localStorage.setItem('charlie_gemini_api_key', geminiKey.trim());
       localStorage.setItem('charlie_web_app_url', webAppUrl.trim());
       localStorage.setItem('charlie_bridge_url', bridgeUrl.trim());
     }
@@ -33,41 +30,25 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-slate-950-80 p-4">
+    <div className="fixed inset-0 flex items-center justify-center bg-slate-950-80 p-4 z-50">
       <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 relative flex flex-col gap-4">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 cursor-pointer"
+          className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 cursor-pointer hover:text-white"
         >
           <X className="w-5 h-5" />
         </button>
 
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2 mb-1">
-            <span>⚙️</span> Charlie Settings & API Bridge
+            <span>⚙️</span> System Settings & Integration
           </h2>
           <p className="text-xs text-slate-400">
-            Configure your zero-cost memory, Gemini AI key, and local desktop helper integration.
+            Configure your zero-cost Google Sheets memory endpoint and local desktop bridge server.
           </p>
         </div>
 
         <form onSubmit={handleSave} className="flex flex-col gap-4 text-xs">
-          {/* Gemini API Key */}
-          <div>
-            <label className="text-slate-300 font-medium mb-1 flex items-center gap-1-5">
-              <Key className="w-4 h-4 text-sky-400" />
-              <span>Google Gemini API Key</span>
-            </label>
-            <input
-              type="password"
-              placeholder="AIzaSy..."
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3-5 py-2-5 text-slate-200 focus-outline-none font-mono"
-            />
-            <p className="text-11 text-slate-400 mt-1">Get your free API key from Google AI Studio.</p>
-          </div>
-
           {/* Google Apps Script Web App URL */}
           <div>
             <label className="text-slate-300 font-medium mb-1 flex items-center gap-1-5">
@@ -123,3 +104,4 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
     </div>
   );
 }
+

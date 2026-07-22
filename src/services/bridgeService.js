@@ -49,4 +49,8 @@ export class BridgeService {
   static async getSystemStatus() {
     return this.executeCommand({ command: 'system_status' });
   }
+
+  static async sendWhatsApp(phone, message) {
+    return this.executeCommand({ command: 'send_whatsapp', phone, message });
+  }
 }

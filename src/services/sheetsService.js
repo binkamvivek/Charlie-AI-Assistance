@@ -1,6 +1,10 @@
 /**
- * Sheets Service - Synchronizes persistent facts with Google Sheets
- * Fallback to LocalStorage if Google Sheets URL is not configured yet.
+ * Sheets Service - Synchronizes persistent facts with Google Sheets via Apps Script.
+ * 
+ * IMPORTANT: All write operations use GET + URL params (not POST) to avoid the
+ * no-cors / Content-Type stripping issue with Google Apps Script.
+ * Apps Script's doGet() handles all actions including saves and deletes.
+ * Fallback to LocalStorage when no Google Sheets URL is configured.
  */
 
 const LOCAL_STORAGE_KEY = 'charlie_memory_facts_v1';
@@ -50,6 +54,9 @@ export class SheetsService {
     }
   }
 
+  /**
+   * Fetch all memory facts from Google Sheets (falls back to localStorage).
+   */
   static async getFacts() {
     const webAppUrl = this.getWebAppUrl();
     if (!webAppUrl) {
@@ -57,19 +64,25 @@ export class SheetsService {
     }
 
     try {
-      const response = await fetch(`${webAppUrl}?action=get_facts`);
+      const url = `${webAppUrl}?action=get_facts&_t=${Date.now()}`;
+      const response = await fetch(url);
       const resData = await response.json();
       if (resData.status === 'success' && resData.data) {
         this.saveLocalFacts(resData.data);
         return resData.data;
       }
     } catch (err) {
-      console.warn('Failed to fetch facts from Google Sheets Web App, using local memory store fallback:', err);
+      console.warn('Failed to fetch facts from Google Sheets, using local fallback:', err);
     }
     return this.getLocalFacts();
   }
 
+  /**
+   * Save or update a fact.
+   * Uses GET + URLSearchParams to bypass the Apps Script no-cors POST body issue.
+   */
   static async saveFact(category, key, value, details = '') {
+    // 1. Always update localStorage first (instant local state)
     const local = this.getLocalFacts();
     const targetCat = category || 'Identity_Facts';
     if (!local[targetCat]) local[targetCat] = [];
@@ -80,29 +93,45 @@ export class SheetsService {
     );
 
     if (existingIdx >= 0) {
-      local[targetCat][existingIdx] = { ...local[targetCat][existingIdx], Value: value, Details: details, Updated_At: now };
+      local[targetCat][existingIdx] = {
+        ...local[targetCat][existingIdx],
+        Value: value,
+        Details: details,
+        Updated_At: now
+      };
     } else {
       local[targetCat].push({ Key: key, Value: value, Details: details, Updated_At: now });
     }
     this.saveLocalFacts(local);
 
+    // 2. Sync to Google Sheets via GET + URL params (avoids CORS/Content-Type issues)
     const webAppUrl = this.getWebAppUrl();
     if (webAppUrl) {
       try {
-        await fetch(webAppUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'save_fact', category: targetCat, key, value, details })
+        const params = new URLSearchParams({
+          action: 'save_fact',
+          category: targetCat,
+          key,
+          value,
+          details,
+          _t: Date.now()
         });
+        await fetch(`${webAppUrl}?${params.toString()}`);
+        console.log(`[SheetsService] Saved to Sheets: [${targetCat}] ${key} = ${value}`);
       } catch (err) {
-        console.warn('Google Sheets sync error:', err);
+        console.warn('[SheetsService] Google Sheets sync failed:', err);
       }
     }
-    return local;
+
+    return { facts: local, synced: !!webAppUrl };
   }
 
+  /**
+   * Delete a fact by key.
+   * Uses GET + URLSearchParams (same CORS bypass as saveFact).
+   */
   static async deleteFact(category, key) {
+    // 1. Update localStorage
     const local = this.getLocalFacts();
     const targetCat = category || 'Identity_Facts';
     if (local[targetCat]) {
@@ -112,19 +141,31 @@ export class SheetsService {
       this.saveLocalFacts(local);
     }
 
+    // 2. Sync deletion to Google Sheets via GET + URL params
     const webAppUrl = this.getWebAppUrl();
     if (webAppUrl) {
       try {
-        await fetch(webAppUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete_fact', category: targetCat, key })
+        const params = new URLSearchParams({
+          action: 'delete_fact',
+          category: targetCat,
+          key,
+          _t: Date.now()
         });
+        await fetch(`${webAppUrl}?${params.toString()}`);
+        console.log(`[SheetsService] Deleted from Sheets: [${targetCat}] ${key}`);
       } catch (err) {
-        console.warn('Google Sheets delete error:', err);
+        console.warn('[SheetsService] Google Sheets delete failed:', err);
       }
     }
-    return local;
+
+    return { facts: local, synced: !!webAppUrl };
+  }
+
+  /**
+   * Log a search/activity keyword to Interests_Log.
+   * Used by intentHandler for web search queries.
+   */
+  static async logActivity(topic, source = 'Voice/Search Query') {
+    return this.saveFact('Interests_Log', topic, source, new Date().toLocaleString());
   }
 }

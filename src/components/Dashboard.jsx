@@ -8,7 +8,7 @@ import QuickActions from './QuickActions';
 import SettingsModal from './SettingsModal';
 import { SheetsService } from '../services/sheetsService';
 import { BridgeService } from '../services/bridgeService';
-import { GeminiService } from '../services/geminiService';
+import { IntentHandler } from '../services/intentHandler';
 
 export default function Dashboard() {
   const [memoryFacts, setMemoryFacts] = useState({});
@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [memorySynced, setMemorySynced] = useState(false);
   const [statusText, setStatusText] = useState('System Ready');
   const [currentResponse, setCurrentResponse] = useState('');
+  const [cardPayload, setCardPayload] = useState(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -38,24 +39,29 @@ export default function Dashboard() {
   }, []);
 
   const handleSendMessage = async (messageText) => {
-    setStatusText('Thinking & Analyzing Memory...');
+    setStatusText('Matching Intent...');
     setCurrentResponse('');
+    setCardPayload(null);
 
-    const res = await GeminiService.generateResponse(messageText, memoryFacts, (newStatus) => {
+    const res = await IntentHandler.processInput(messageText, memoryFacts, (newStatus) => {
       setStatusText(newStatus);
     });
 
     setCurrentResponse(res.text);
+    if (res.cardPayload) {
+      setCardPayload(res.cardPayload);
+    }
     setStatusText(res.toolExecuted ? 'Task Executed Successfully' : 'Idle / Ready');
 
     // Refresh memory facts in case tools modified them
-    const updatedFacts = await SheetsService.getFacts();
+    const updatedFacts = res.updatedFacts || await SheetsService.getFacts();
     setMemoryFacts(updatedFacts);
   };
 
   const handleActionTriggered = (actionMsg) => {
     setStatusText('Executing Task...');
     setCurrentResponse(actionMsg);
+    setCardPayload(null);
     setTimeout(() => {
       setStatusText('System Ready');
     }, 4000);
@@ -89,6 +95,7 @@ export default function Dashboard() {
               onSendMessage={handleSendMessage}
               status={statusText}
               currentResponse={currentResponse}
+              cardPayload={cardPayload}
               ttsEnabled={ttsEnabled}
               setTtsEnabled={setTtsEnabled}
             />
@@ -112,3 +119,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

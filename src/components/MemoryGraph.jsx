@@ -19,16 +19,16 @@ export default function MemoryGraph({ memoryFacts = {}, onMemoryUpdated }) {
   const handleAddFact = async (e) => {
     e.preventDefault();
     if (!newKey.trim() || !newValue.trim()) return;
-    const updated = await SheetsService.saveFact(activeTab, newKey.trim(), newValue.trim());
-    onMemoryUpdated(updated);
+    const result = await SheetsService.saveFact(activeTab, newKey.trim(), newValue.trim());
+    onMemoryUpdated(result.facts);
     setNewKey('');
     setNewValue('');
     setIsAdding(false);
   };
 
   const handleDelete = async (key) => {
-    const updated = await SheetsService.deleteFact(activeTab, key);
-    onMemoryUpdated(updated);
+    const result = await SheetsService.deleteFact(activeTab, key);
+    onMemoryUpdated(result.facts);
   };
 
   return (

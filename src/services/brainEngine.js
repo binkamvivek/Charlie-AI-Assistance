@@ -970,7 +970,7 @@ const INTENT_CATEGORIES = [
                 context.lastIntent = 'SYSTEM_ACTION';
                 if (res.success) {
                     return {
-                        text: `Opening WhatsApp to send "${waMessage}" to ${waPhone}.`,
+                        text: `WhatsApp message sent "${waMessage}" to ${waPhone}.`,
                         toolExecuted: true,
                         toolLogs: [`Sent WhatsApp: ${waMessage} to ${waPhone}`],
                     };
@@ -1005,7 +1005,7 @@ const INTENT_CATEGORIES = [
                 context.lastIntent = 'SYSTEM_ACTION';
                 if (res.success) {
                     return {
-                        text: `Opening WhatsApp to send "${waMessage}" to ${waPhone}.`,
+                        text: `WhatsApp message sent "${waMessage}" to ${waPhone}.`,
                         toolExecuted: true,
                         toolLogs: [`Sent WhatsApp: ${waMessage} to ${waPhone}`],
                     };

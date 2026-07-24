@@ -6,6 +6,7 @@ dist/
 
 # dependencies
 node_modules/
+desktop-bridge/node_modules/
 
 # logs
 npm-debug.log*
@@ -22,3 +23,9 @@ pnpm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# WhatsApp headless browser session data
+whatsapp-data/
+.wwebjs_cache/
+desktop-bridge/whatsapp-data/
+desktop-bridge/.wwebjs_cache/

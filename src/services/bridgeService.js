@@ -68,6 +68,44 @@ export class BridgeService {
   }
 
   static async sendWhatsApp(phone, message) {
-    return this.executeCommand({ command: 'send_whatsapp', phone, message });
+    // Try the dedicated background WhatsApp endpoint first (whatsapp-web.js)
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/whatsapp/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, message })
+      });
+      const data = await response.json();
+      if (data.success) {
+        return { ...data, background: true };
+      }
+      // If WhatsApp client not ready, fallback to old method
+      if (data.waStatus === 'qr_needed') {
+        return {
+          success: false,
+          error: data.error,
+          waStatus: 'qr_needed',
+          needsQr: true,
+        };
+      }
+      return data;
+    } catch (err) {
+      // Fallback to old execute method
+      return this.executeCommand({ command: 'send_whatsapp', phone, message });
+    }
+  }
+
+  /**
+   * Check WhatsApp authentication status
+   */
+  static async getWhatsAppStatus() {
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/whatsapp/status`, { method: 'GET' });
+      return await response.json();
+    } catch (e) {
+      return { status: 'offline', ready: false };
+    }
   }
 }

@@ -960,9 +960,7 @@ const INTENT_CATEGORIES = [
             if (waPhone && waMessage) {
                 // Check if bridge is available
                 const bridgeCheck = await BridgeService.checkBridgeAvailable();
-
                 if (bridgeCheck.available) {
-                    // Bridge available → use it for silent sending
                     if (onStatusChange) onStatusChange(`Sending WhatsApp message to ${waPhone}...`);
                     const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
                     if (res.success) {
@@ -972,25 +970,12 @@ const INTENT_CATEGORIES = [
                             toolLogs: [`Sent WhatsApp to ${waPhone}: ${waMessage}`],
                         };
                     }
-                    if (res.needsQr) {
-                        return {
-                            text: `WhatsApp needs authentication. Please open ${BridgeService.getBridgeUrl()}/wa-qr in your browser, scan the QR code with your phone's WhatsApp, then try again.`,
-                            toolExecuted: false,
-                            toolLogs: ['WhatsApp QR authentication needed'],
-                        };
-                    }
                 }
 
                 // Fallback: wa.me link in new tab (works everywhere — Vercel, local, etc.)
-                const waUrl = openWaMe(waPhone, waMessage);
+                openWaMe(waPhone, waMessage);
                 return {
-                    text: `Opening WhatsApp in a new tab with your message pre-filled for ${waPhone}.`,
-                    cardPayload: {
-                        title: `WhatsApp to ${waPhone}`,
-                        googleUrl: waUrl,
-                        youtubeUrl: null,
-                        query: `WhatsApp message to ${waPhone}`,
-                    },
+                    text: `Opening WhatsApp Web in a new tab with message pre-filled for ${waPhone}.`,
                     toolExecuted: true,
                     toolLogs: [`Opened wa.me for ${waPhone}`],
                 };
@@ -1021,12 +1006,6 @@ const INTENT_CATEGORIES = [
                     }
                     return {
                         text: `Opening WhatsApp Web in your browser.`,
-                        cardPayload: {
-                            title: 'WhatsApp Web',
-                            googleUrl: 'https://web.whatsapp.com',
-                            youtubeUrl: null,
-                            query: 'WhatsApp Web',
-                        },
                         toolExecuted: true,
                         toolLogs: ['Opened WhatsApp Web in browser'],
                     };
@@ -1036,9 +1015,7 @@ const INTENT_CATEGORIES = [
                 const bridgeCheck = await BridgeService.checkBridgeAvailable();
                 if (!bridgeCheck.available) {
                     return {
-                        text: bridgeCheck.isLocal
-                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
-                            : `Launching "${target}" requires the Desktop Bridge running on your local machine. Run the app locally with the bridge for full functionality.`,
+                        text: bridgeCheck.error || 'Desktop Bridge is not running. Start it with: node desktop-bridge/server.js',
                         toolExecuted: false,
                         toolLogs: ['Desktop Bridge unavailable'],
                     };
@@ -1075,9 +1052,7 @@ const INTENT_CATEGORIES = [
                 const bridgeCheck = await BridgeService.checkBridgeAvailable();
                 if (!bridgeCheck.available) {
                     return {
-                        text: bridgeCheck.isLocal
-                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
-                            : `Email drafting requires the Desktop Bridge. Run the app locally for this feature.`,
+                        text: bridgeCheck.error || 'Desktop Bridge is not running. Start it with: node desktop-bridge/server.js',
                         toolExecuted: false,
                         toolLogs: ['Desktop Bridge unavailable'],
                     };
@@ -1106,15 +1081,13 @@ const INTENT_CATEGORIES = [
                 const bridgeCheck = await BridgeService.checkBridgeAvailable();
                 if (!bridgeCheck.available) {
                     return {
-                        text: bridgeCheck.isLocal
-                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
-                            : `System status requires the Desktop Bridge. Run the app locally for this feature.`,
+                        text: bridgeCheck.error || 'Desktop Bridge is not running. Start it with: node desktop-bridge/server.js',
                         toolExecuted: false,
                         toolLogs: ['Desktop Bridge unavailable'],
                     };
                 }
 
-                if (onStatusChange) onStatusChange('Fetching System Logs...');
+                if (onStatusChange) onStatusChange('Fetching System Status...');
                 const res = await BridgeService.getSystemStatus();
                 if (res.success && res.data) {
                     return {

@@ -20,7 +20,12 @@ const APP_COMMANDS = {
   calculator: process.platform === 'win32' ? 'start calc' : 'open -a Calculator',
   calc: process.platform === 'win32' ? 'start calc' : 'open -a Calculator',
   browser: process.platform === 'win32' ? 'start msedge' : 'open -a Safari',
-  chrome: process.platform === 'win32' ? 'start chrome' : 'open -a "Google Chrome"'
+  chrome: process.platform === 'win32' ? 'start chrome' : 'open -a "Google Chrome"',
+  whatsapp: process.platform === 'win32' ? 'start whatsapp' : 'open -a "WhatsApp"',
+  wa: process.platform === 'win32' ? 'start whatsapp' : 'open -a "WhatsApp"',
+  spotify: process.platform === 'win32' ? 'start spotify' : 'open -a Spotify',
+  slack: process.platform === 'win32' ? 'start slack' : 'open -a Slack',
+  msedge: process.platform === 'win32' ? 'start msedge' : 'open -a "Microsoft Edge"'
 };
 
 function getLaunchCommand(appName) {

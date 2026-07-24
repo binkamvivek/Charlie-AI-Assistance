@@ -897,10 +897,13 @@ const INTENT_CATEGORIES = [
         priority: 40,
         keywords: ['open', 'launch', 'start', 'run', 'email', 'mail', 'draft', 'system', 'status', 'health', 'ram', 'cpu', 'terminal', 'code'],
         patterns: [
-            // App launch
-            /^(?:open|launch|start|run)\s+(.+)$/i,
+            // Combined: "open whatsapp and send [message] to [phone]" (any variation)
+            /^(?:open|launch|start|run)\s+(?:whatsapp|wa)\s+and\s+send/i,
+            // App launch (simple — must be just an app name, no trailing "and")
+            /^(?:open|launch|start|run)\s+(?!.*\b(?:and|to)\b)(.+)$/i,
+            /^(?:open|launch|start|run)\s+(.+?)\s+only$/i,
             // WhatsApp send
-            /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
+            /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^send\s+(?:a\s+)?whatsapp\s+(?:message\s+)?(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)\s+(?:saying|with|text|that)\s+(.+)$/i,
             // Email drafting
@@ -927,37 +930,45 @@ const INTENT_CATEGORIES = [
                 };
             }
 
-            // ---- WhatsApp Send Message ----
-            // Pattern A: "send [message] to [phone]" or "send whatsapp message [message] to [phone]"
-            const waPatternA = input.match(/^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i);
-            // Pattern B: "send [message] to this number [phone]"
-            const waPatternB = input.match(/^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i);
-            // Pattern C: "send whatsapp to [phone] saying [message]"
-            const waPatternC = input.match(/^send\s+(?:a\s+)?whatsapp\s+(?:message\s+)?(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)\s+(?:saying|with|text|that)\s+(.+)$/i);
-
+            // Declare phone/message variables at function scope so all branches can use them
             let waPhone = null;
             let waMessage = null;
 
-            if (waPatternA) {
-                waMessage = waPatternA[1].trim();
-                waPhone = waPatternA[2].trim();
-            } else if (waPatternB) {
-                waMessage = waPatternB[1].trim();
-                waPhone = waPatternB[2].trim();
-            } else if (waPatternC) {
-                waPhone = waPatternC[1].trim();
-                waMessage = waPatternC[2].trim();
+            // ---- Combined: "open whatsapp and send [message] to [phone]" or any "open whatsapp and send..." variation ----
+            const combinedMatch = input.match(/^(?:open|launch|start|run)\s+(?:whatsapp|wa)\s+and\s+send/i);
+            if (combinedMatch) {
+                // Extract phone number — look for digits with optional + prefix, min 10 digits
+                const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
+                const phoneMatch = input.match(phoneRegex);
+                if (phoneMatch) {
+                    waPhone = phoneMatch[1].trim();
+                    // Message is everything after the colon/semicolon, OR after "to this number/phone/no" if no colon
+                    const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
+                    if (afterColonMatch) {
+                        waMessage = afterColonMatch[1].trim();
+                    } else {
+                        // If no colon, message is between "send" and "to"
+                        const msgBetween = input.match(/send\s+(?:this\s+)?(?:message\s+)?(.+?)\s+to\s+/i);
+                        if (msgBetween) {
+                            waMessage = msgBetween[1].trim();
+                        } else {
+                            // Fallback: message is everything after phone-related keywords
+                            const afterToMatch = input.match(/(?:send|text|message)\s+(?:this\s+)?(?:message\s+)?(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*/i);
+                            if (afterToMatch) {
+                                waMessage = afterToMatch[1].trim();
+                            }
+                        }
+                    }
+                    // Clean up any trailing "to this number/phone" remnants in message
+                    if (waMessage) {
+                        waMessage = waMessage.replace(/\s+to\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*$/i, '').trim();
+                    }
+                }
             }
 
             if (waPhone && waMessage) {
                 if (onStatusChange) onStatusChange(`Sending WhatsApp message...`);
-
-                // First launch WhatsApp if not already running
-                await BridgeService.launchApp('whatsapp');
-
-                // Then open the pre-filled chat
                 const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
-
                 context.lastIntent = 'SYSTEM_ACTION';
                 if (res.success) {
                     return {
@@ -973,7 +984,42 @@ const INTENT_CATEGORIES = [
                 };
             }
 
-            // ---- App Launch ----
+            // ---- WhatsApp Send Message (standalone send commands) ----
+            // Extract phone and message using flexible approach
+            const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
+            const phoneMatch = input.match(phoneRegex);
+            if (phoneMatch && /^(?:send|text|message)/i.test(lower)) {
+                waPhone = phoneMatch[1].trim();
+                const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
+                if (afterColonMatch) {
+                    waMessage = afterColonMatch[1].trim();
+                } else {
+                    const msgBetween = input.match(/send\s+(?:this\s+)?(?:message\s+)?(.+?)\s+to\s+/i);
+                    if (msgBetween) {
+                        waMessage = msgBetween[1].trim();
+                    }
+                }
+            }
+
+            if (waPhone && waMessage) {
+                if (onStatusChange) onStatusChange(`Sending WhatsApp message...`);
+                const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
+                context.lastIntent = 'SYSTEM_ACTION';
+                if (res.success) {
+                    return {
+                        text: `Opening WhatsApp to send "${waMessage}" to ${waPhone}.`,
+                        toolExecuted: true,
+                        toolLogs: [`Sent WhatsApp: ${waMessage} to ${waPhone}`],
+                    };
+                }
+                return {
+                    text: `Attempted to send WhatsApp message. ${res.error || 'Desktop Bridge helper not responding at localhost:3001.'}`,
+                    toolExecuted: true,
+                    toolLogs: [`Failed sending WhatsApp to ${waPhone}`],
+                };
+            }
+
+            // ---- App Launch (simple app name only) ----
             const launchMatch = input.match(/^(?:open|launch|start|run)\s+(.+)$/i);
             if (launchMatch) {
                 let target = launchMatch[1].trim().toLowerCase();

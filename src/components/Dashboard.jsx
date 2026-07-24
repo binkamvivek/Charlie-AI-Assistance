@@ -79,8 +79,8 @@ export default function Dashboard() {
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
-      {/* Main Spatial Bento Grid */}
-      <main className="flex-1 p-6 max-w-1600 mx-auto w-full flex flex-col justify-center">
+{/* Main Spatial Bento Grid */}
+       <main className="flex-1 p-6 max-w-1600 mx-auto w-full flex flex-col">
         <div className="grid grid-cols-1 md-grid-cols-4 gap-6 items-stretch">
           
           {/* Column 1 (Left) */}

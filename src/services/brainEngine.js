@@ -921,14 +921,8 @@ const INTENT_CATEGORIES = [
             if (!bridgeCheck.available) {
                 // Bridge unavailable — provide a clear, helpful message
                 context.lastIntent = 'SYSTEM_ACTION';
-                let helpText;
-                if (!bridgeCheck.isLocal) {
-                    helpText = 'System actions (opening apps, sending WhatsApp, etc.) only work when running on your local machine with the Desktop Bridge server active. To use this feature:\n\n1. Run the Desktop Bridge locally: `node desktop-bridge/server.js`\n2. Open the app at http://localhost:4321 (or your local dev URL)\n\nOn Vercel/cloud, system-level commands cannot reach your computer.';
-                } else {
-                    helpText = 'Desktop Bridge (local helper server) is not running. To use system actions like launching apps or sending WhatsApp, start the helper server in your terminal:\n\n`node desktop-bridge/server.js`\n\nThen try again once the server is running on port 3001.';
-                }
                 return {
-                    text: helpText,
+                    text: bridgeCheck.error,
                     toolExecuted: false,
                     toolLogs: ['Desktop Bridge unavailable: ' + bridgeCheck.error],
                 };

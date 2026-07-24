@@ -935,25 +935,46 @@ const INTENT_CATEGORIES = [
             if (phoneMatch && /^(?:send|text|message|whatsapp)/i.test(lower)) {
                 waPhone = phoneMatch[1].trim();
 
-                // Try to extract message from various patterns
-                const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
-                if (afterColonMatch) {
-                    waMessage = afterColonMatch[1].trim();
-                } else {
-                    const msgBetween = input.match(/send\s+(?:this\s+)?(?:message\s+)?(.+?)\s+to\s+/i);
-                    if (msgBetween) {
-                        waMessage = msgBetween[1].trim();
-                    } else {
-                        const afterToMatch = input.match(/(?:send|text|message)\s+(?:this\s+)?(?:message\s+)?(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*/i);
-                        if (afterToMatch) {
-                            waMessage = afterToMatch[1].trim();
-                        }
+                // Try to extract message from various patterns.
+                // Strategy: look for text that appears BEFORE the phone number,
+                // excluding action words like "send", "message", "whatsapp", "text", "to", "this".
+                const fullInput = input;
+                const phoneIdx = fullInput.search(phoneRegex);
+
+                if (phoneIdx > 0) {
+                    // Everything before the phone number
+                    let beforePhone = fullInput.substring(0, phoneIdx).trim();
+
+                    // Strip leading action words
+                    beforePhone = beforePhone
+                        .replace(/^(?:send|text|message|whatsapp|a)\s+/i, '')
+                        .replace(/\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)?\s*$/i, '')
+                        .replace(/\s+(?:to|at)\s*$/i, '')
+                        .trim();
+
+                    if (beforePhone && beforePhone.length > 0) {
+                        waMessage = beforePhone;
                     }
                 }
-                // Clean up trailing "to this number/phone" in message
-                if (waMessage) {
-                    waMessage = waMessage.replace(/\s+to\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*$/i, '').trim();
+
+                // If still no message, try patterns with explicit delimiters
+                if (!waMessage) {
+                    const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
+                    if (afterColonMatch) {
+                        waMessage = afterColonMatch[1].trim();
+                    }
                 }
+
+                // If still no message but we have words after "send message|text|whatsapp", use those
+                if (!waMessage) {
+                    const directMsgMatch = input.match(/^(?:send|text|message|whatsapp)\s+(?:message\s+)?(.+?)\s+to\s+/i);
+                    if (directMsgMatch) {
+                        waMessage = directMsgMatch[1].trim();
+                    }
+                }
+
+                // If waMessage still empty after all attempts, set to null (open WhatsApp without message)
+                if (waMessage === '') waMessage = null;
             }
 
             // ---- WhatsApp: try Desktop Bridge first, fall back to wa.me browser link ----

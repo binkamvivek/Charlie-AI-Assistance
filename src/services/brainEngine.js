@@ -895,17 +895,21 @@ const INTENT_CATEGORIES = [
     {
         name: 'SYSTEM_ACTION',
         priority: 40,
-        keywords: ['open', 'launch', 'start', 'run', 'email', 'mail', 'draft', 'system', 'status', 'health', 'ram', 'cpu', 'terminal', 'code'],
+        keywords: ['open', 'launch', 'start', 'run', 'email', 'mail', 'draft', 'system', 'status', 'health', 'ram', 'cpu', 'terminal', 'code', 'whatsapp', 'send', 'text', 'message'],
         patterns: [
             // Combined: "open whatsapp and send [message] to [phone]" (any variation)
             /^(?:open|launch|start|run)\s+(?:whatsapp|wa)\s+and\s+send/i,
             // App launch (simple — must be just an app name, no trailing "and")
             /^(?:open|launch|start|run)\s+(?!.*\b(?:and|to)\b)(.+)$/i,
             /^(?:open|launch|start|run)\s+(.+?)\s+only$/i,
-            // WhatsApp send
+            // WhatsApp send — many variants
             /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^send\s+(?:a\s+)?whatsapp\s+(?:message\s+)?(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)\s+(?:saying|with|text|that)\s+(.+)$/i,
+            // Broad catch-all: "send this message to this no. [phone] : [message]"
+            /^(?:send|text|message)\s+.+/i,
+            // "whatsapp this message to this no. [phone] : [message]"
+            /^whatsapp\s+.+/i,
             // Email drafting
             /\b(email|mail|draft email|send email|write email)\b/i,
             // System status / health
@@ -988,7 +992,7 @@ const INTENT_CATEGORIES = [
             // Extract phone and message using flexible approach
             const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
             const phoneMatch = input.match(phoneRegex);
-            if (phoneMatch && /^(?:send|text|message)/i.test(lower)) {
+            if (phoneMatch && /^(?:send|text|message|whatsapp)/i.test(lower)) {
                 waPhone = phoneMatch[1].trim();
                 const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
                 if (afterColonMatch) {

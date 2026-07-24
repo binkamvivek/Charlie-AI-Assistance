@@ -20,14 +20,9 @@ let waClient = null;
 let waStatus = 'uninitialized'; // uninitialized | initializing | ready | disconnected | error
 let waError = null;
 let currentQrCode = null; // stores the raw QR string for the /whatsapp/qr endpoint
+let qrCodeResolvers = []; // for polling/streaming
 
-function initWhatsAppClient() {
-  if (waClient) return;
-
-  waStatus = 'initializing';
-  console.log('[WhatsApp] Initializing background client...');
-
-  // Clean up stale Puppeteer lock files from previous crashes
+function cleanupStaleLocks() {
   const sessionDir = path.resolve('./whatsapp-data/session');
   if (fs.existsSync(sessionDir)) {
     const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
@@ -39,11 +34,9 @@ function initWhatsAppClient() {
           console.log('  [Cleanup] Removed stale lock file:', file);
         }
       } catch (e) {
-        // Permission errors are fine — browser might still be running
         console.log('  [Cleanup] Could not remove', file, '- may be in use');
       }
     }
-    // Also clean the Cache directory lock
     const cacheLockPath = path.join(sessionDir, 'Default', 'Cache', 'Cache_Data', 'sqldb0');
     try {
       if (fs.existsSync(cacheLockPath)) {
@@ -51,6 +44,16 @@ function initWhatsAppClient() {
       }
     } catch (e) { /* ignore */ }
   }
+}
+
+function initWhatsAppClient() {
+  if (waClient) return;
+
+  waStatus = 'initializing';
+  console.log('[WhatsApp] Initializing background client...');
+
+  // Clean up stale Puppeteer lock files from previous crashes
+  cleanupStaleLocks();
 
   waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: './whatsapp-data' }),
@@ -70,6 +73,9 @@ function initWhatsAppClient() {
   waClient.on('qr', (qr) => {
     waStatus = 'qr_needed';
     currentQrCode = qr;
+    // Notify all pending resolvers
+    qrCodeResolvers.forEach(r => r(qr));
+    qrCodeResolvers = [];
     console.log('⚠️  =============================================');
     console.log('⚠️  WhatsApp QR code needed!');
     console.log('⚠️  Open http://localhost:3001/qr in your browser to scan');
@@ -92,14 +98,42 @@ function initWhatsAppClient() {
     console.error('❌ [WhatsApp] Authentication failure:', msg);
   });
 
-  waClient.on('disconnected', (reason) => {
+  waClient.on('disconnected', async (reason) => {
     waStatus = 'disconnected';
     console.log('[WhatsApp] Disconnected:', reason);
-    // Auto-reconnect after 5 seconds
-    setTimeout(() => {
-      console.log('[WhatsApp] Attempting reconnection...');
-      waClient.initialize();
-    }, 5000);
+
+    if (reason === 'LOGOUT') {
+      // Session was revoked — destroy old client and clean up session data
+      console.log('[WhatsApp] Session was logged out. Cleaning up and preparing for fresh auth...');
+      try {
+        waClient.destroy();
+      } catch (_) { /* ignore destroy errors */ }
+      waClient = null;
+      currentQrCode = null;
+
+      // Remove all session data so next init starts fresh
+      const waDataPath = path.resolve('./whatsapp-data');
+      try {
+        fs.rmSync(waDataPath, { recursive: true, force: true });
+        console.log('  [Cleanup] Removed all session data');
+      } catch (e) {
+        console.log('  [Cleanup] Could not remove session data:', e.message);
+      }
+
+      // Create a fresh client after a short delay
+      setTimeout(() => {
+        console.log('[WhatsApp] Re-initializing with fresh session...');
+        initWhatsAppClient();
+      }, 3000);
+    } else {
+      // Temporary disconnect — try to reconnect
+      setTimeout(() => {
+        console.log('[WhatsApp] Attempting reconnection...');
+        waClient.initialize().catch((err) => {
+          console.error('[WhatsApp] Reconnection failed:', err.message);
+        });
+      }, 5000);
+    }
   });
 
   waClient.initialize().catch((err) => {
@@ -175,7 +209,8 @@ app.get('/whatsapp/status', (req, res) => {
 // WhatsApp QR scan page — embedded in the bridge itself (no second client needed)
 app.get('/whatsapp/qr', async (req, res) => {
   if (waStatus === 'ready') {
-    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>WhatsApp - Charlie AI</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}.container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155;box-shadow:0 20px 60px rgba(0,0,0,0.5)}h1{font-size:24px;color:#38bdf8}.status{background:#d1fae5;color:#065f46;padding:12px 20px;border-radius:12px;font-weight:500}</style></head><body><div class="container"><h1>✅ WhatsApp Connected</h1><p class="status">Your WhatsApp is already authenticated! Messages will be sent silently in the background.</p></div></body></html>`);
+    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>WhatsApp - Charlie AI</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}.container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155;box-shadow:0 20px 60px rgba(0,0,0,0.5)}h1{font-size:24px;color:#38bdf8}.status{background:#d1fae5;color:#065f46;padding:12px 20px;border-radius:12px;font-weight:500}</style></head><body><div class="container"><h1>✅ WhatsApp Connected</h1><p class="status">Your WhatsApp is already authenticated! Messages will be sent silently in the background.</p></div>  </div>
+</body></html>`);
   }
   if (!currentQrCode) {
     return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>WhatsApp QR - Charlie AI</title><meta http-equiv="refresh" content="2"><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}.container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155}</style></head><body><div class="container"><h1 style="color:#38bdf8">⏳ Generating QR Code...</h1><p style="color:#94a3b8">Please wait, the QR code will appear shortly...</p></div></body></html>`);
@@ -238,12 +273,28 @@ app.get('/whatsapp/qr', async (req, res) => {
         <li>Once connected, refresh this page — it will show ✅ Connected</li>
       </ol>
     </div>
-  </div>
 </body>
 </html>`;
     res.send(html);
   } catch (e) {
     res.status(500).send('QR generation error: ' + e.message);
+  }
+});
+
+// WhatsApp QR data endpoint — returns QR as base64 data URI for inline dashboard display
+app.get('/whatsapp/qr-data', async (req, res) => {
+  if (waStatus === 'ready') {
+    return res.json({ ready: true, waStatus: 'ready' });
+  }
+  if (!currentQrCode) {
+    return res.json({ ready: false, waStatus: waStatus, qrDataUri: null });
+  }
+  try {
+    const { default: qrcode } = await import('qrcode');
+    const qrDataUri = await qrcode.toDataURL(currentQrCode, { width: 280, margin: 1 });
+    res.json({ ready: false, waStatus: 'qr_needed', qrDataUri });
+  } catch (e) {
+    res.json({ ready: false, waStatus: 'error', error: e.message });
   }
 });
 
@@ -267,7 +318,7 @@ app.post('/whatsapp/send', async (req, res) => {
     return res.status(503).json({
       success: false,
       error: waStatus === 'qr_needed'
-        ? 'WhatsApp not authenticated yet. Run `node desktop-bridge/qr-display.js` and scan the QR code first.'
+        ? 'WhatsApp not authenticated yet. Scan the QR code displayed in the dashboard to link your WhatsApp.'
         : `WhatsApp client is ${waStatus}. Please wait for it to be ready.`,
       waStatus,
     });
@@ -287,18 +338,8 @@ app.post('/whatsapp/send', async (req, res) => {
   console.log(`[WhatsApp] Sending message to ${cleanPhone} in background...`);
 
   try {
-    // Check if the number is registered on WhatsApp
-    const isRegistered = await waClient.isRegisteredUser(cleanPhone);
-    if (!isRegistered) {
-      console.warn(`[WhatsApp] Number ${cleanPhone} is not registered on WhatsApp`);
-      return res.json({
-        success: false,
-        error: 'This phone number is not registered on WhatsApp.',
-      });
-    }
-
-    const chatId = cleanPhone;
-    const sent = await waClient.sendMessage(chatId, message);
+    // Send directly — isRegisteredUser is unreliable and can crash
+    const sent = await waClient.sendMessage(cleanPhone, message);
     console.log(`[WhatsApp] Message sent successfully to ${cleanPhone} (ID: ${sent.id.id})`);
 
     return res.json({
@@ -402,7 +443,7 @@ app._handleWhatsAppSend = async (req, res) => {
     return res.status(503).json({
       success: false,
       error: waStatus === 'qr_needed'
-        ? 'WhatsApp not authenticated yet. Run `node desktop-bridge/qr-display.js` and scan the QR code first.'
+        ? 'WhatsApp not authenticated yet. Scan the QR code displayed in the dashboard to link your WhatsApp.'
         : `WhatsApp client is ${waStatus}. Please wait for it to be ready.`,
       waStatus,
     });
@@ -417,14 +458,7 @@ app._handleWhatsAppSend = async (req, res) => {
   console.log(`[WhatsApp] Sending message to ${chatId} in background...`);
 
   try {
-    const isRegistered = await waClient.isRegisteredUser(chatId);
-    if (!isRegistered) {
-      return res.json({
-        success: false,
-        error: 'This phone number is not registered on WhatsApp.',
-      });
-    }
-
+    // Send directly — isRegisteredUser is unreliable and can crash
     const sent = await waClient.sendMessage(chatId, message || '');
     console.log(`[WhatsApp] Message sent successfully (ID: ${sent.id.id})`);
 

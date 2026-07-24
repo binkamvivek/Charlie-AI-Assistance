@@ -261,7 +261,7 @@ body {
 .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
 
 .text-center { text-align: center; }
-.text-left { text-left: left; }
+.text-left { text-align: left; }
 .uppercase { text-transform: uppercase; }
 .tracking-wider { letter-spacing: 0.05em; }
 .tracking-tight { letter-spacing: -0.025em; }

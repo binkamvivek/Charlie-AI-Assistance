@@ -80,7 +80,7 @@ export class BridgeService {
       if (data.success) {
         return { ...data, background: true };
       }
-      // If WhatsApp client not ready, fallback to old method
+      // If WhatsApp client not ready, return the QR needed status
       if (data.waStatus === 'qr_needed') {
         return {
           success: false,
@@ -106,6 +106,19 @@ export class BridgeService {
       return await response.json();
     } catch (e) {
       return { status: 'offline', ready: false };
+    }
+  }
+
+  /**
+   * Get WhatsApp QR code as base64 data URI for inline dashboard display
+   */
+  static async getWhatsAppQR() {
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/whatsapp/qr-data`, { method: 'GET' });
+      return await response.json();
+    } catch (e) {
+      return { ready: false, waStatus: 'offline', qrDataUri: null, error: 'Bridge offline' };
     }
   }
 }

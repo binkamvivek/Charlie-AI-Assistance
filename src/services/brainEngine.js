@@ -892,20 +892,21 @@ const INTENT_CATEGORIES = [
     },
 
     // ===== 6. SYSTEM ACTIONS =====
+    // Uses Desktop Bridge when available (local environment, bridge running).
+    // Falls back to browser-based wa.me links for WhatsApp (works on Vercel/cloud too).
     {
         name: 'SYSTEM_ACTION',
         priority: 40,
         keywords: ['open', 'launch', 'start', 'run', 'email', 'mail', 'draft', 'system', 'status', 'health', 'ram', 'cpu', 'terminal', 'code', 'whatsapp', 'send', 'text', 'message'],
         patterns: [
-            // App launch (simple app name)
+            // App launch
             /^(?:open|launch|start|run)\s+(.+)$/i,
-            // WhatsApp send — many variants
+            // WhatsApp send patterns
             /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^send\s+(?:a\s+)?whatsapp\s+(?:message\s+)?(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)\s+(?:saying|with|text|that)\s+(.+)$/i,
-            // Broad catch-all: "send this message to this no."
+            // Broader WhatsApp/send patterns
             /^(?:send|text|message)\s+.+/i,
-            // "whatsapp this message to this no."
             /^whatsapp\s+.+/i,
             // Email drafting
             /\b(email|mail|draft email|send email|write email)\b/i,
@@ -913,24 +914,28 @@ const INTENT_CATEGORIES = [
             /\b(system status|hardware|clear logs|system health|ram|cpu)\b/i,
         ],
         async handler(input, lower, { memoryFacts, context, onStatusChange }) {
-            // ---- Check if Desktop Bridge is available before any system action ----
-            const bridgeCheck = await BridgeService.checkBridgeAvailable();
-            if (!bridgeCheck.available) {
-                context.lastIntent = 'SYSTEM_ACTION';
-                return {
-                    text: bridgeCheck.error,
-                    toolExecuted: false,
-                    toolLogs: ['Desktop Bridge unavailable: ' + bridgeCheck.error],
-                };
-            }
+            context.lastIntent = 'SYSTEM_ACTION';
 
-            // ---- WhatsApp Phone/Message extraction (shared logic) ----
+            // ---- Helper: open wa.me link in new tab (browser fallback) ----
+            const openWaMe = (phone, message) => {
+                const cleanPhone = phone.replace(/[^\d+]/g, '');
+                const encodedMsg = encodeURIComponent(message || '');
+                const waUrl = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
+                if (typeof window !== 'undefined') {
+                    window.open(waUrl, '_blank');
+                }
+                return waUrl;
+            };
+
+            // ---- Extract WhatsApp phone & message from input ----
             let waPhone = null;
             let waMessage = null;
             const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
             const phoneMatch = input.match(phoneRegex);
             if (phoneMatch && /^(?:send|text|message|whatsapp)/i.test(lower)) {
                 waPhone = phoneMatch[1].trim();
+
+                // Try to extract message from various patterns
                 const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
                 if (afterColonMatch) {
                     waMessage = afterColonMatch[1].trim();
@@ -951,49 +956,106 @@ const INTENT_CATEGORIES = [
                 }
             }
 
-            // ---- WhatsApp Send (if we have phone + message) ----
+            // ---- WhatsApp: try Desktop Bridge first, fall back to wa.me browser link ----
             if (waPhone && waMessage) {
-                if (onStatusChange) onStatusChange(`Sending WhatsApp message to ${waPhone}...`);
-                const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
-                context.lastIntent = 'SYSTEM_ACTION';
-                if (res.success) {
-                    return {
-                        text: `WhatsApp message sent to ${waPhone}.`,
-                        toolExecuted: true,
-                        toolLogs: [`Sent WhatsApp to ${waPhone}: ${waMessage}`],
-                    };
+                // Check if bridge is available
+                const bridgeCheck = await BridgeService.checkBridgeAvailable();
+
+                if (bridgeCheck.available) {
+                    // Bridge available → use it for silent sending
+                    if (onStatusChange) onStatusChange(`Sending WhatsApp message to ${waPhone}...`);
+                    const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
+                    if (res.success) {
+                        return {
+                            text: `WhatsApp message sent to ${waPhone} silently.`,
+                            toolExecuted: true,
+                            toolLogs: [`Sent WhatsApp to ${waPhone}: ${waMessage}`],
+                        };
+                    }
+                    if (res.needsQr) {
+                        return {
+                            text: `WhatsApp needs authentication. Please open ${BridgeService.getBridgeUrl()}/wa-qr in your browser, scan the QR code with your phone's WhatsApp, then try again.`,
+                            toolExecuted: false,
+                            toolLogs: ['WhatsApp QR authentication needed'],
+                        };
+                    }
                 }
-                if (res.needsQr) {
-                    return {
-                        text: `WhatsApp needs authentication. Please open ${BridgeService.getBridgeUrl()}/wa-qr in your browser, scan the QR code with your phone's WhatsApp, then try again.`,
-                        toolExecuted: false,
-                        toolLogs: ['WhatsApp QR authentication needed'],
-                    };
-                }
+
+                // Fallback: wa.me link in new tab (works everywhere — Vercel, local, etc.)
+                const waUrl = openWaMe(waPhone, waMessage);
                 return {
-                    text: `Could not send WhatsApp message: ${res.error || 'Desktop Bridge helper not responding.'}`,
+                    text: `Opening WhatsApp in a new tab with your message pre-filled for ${waPhone}.`,
+                    cardPayload: {
+                        title: `WhatsApp to ${waPhone}`,
+                        googleUrl: waUrl,
+                        youtubeUrl: null,
+                        query: `WhatsApp message to ${waPhone}`,
+                    },
                     toolExecuted: true,
-                    toolLogs: [`Failed sending WhatsApp to ${waPhone}: ${res.error}`],
+                    toolLogs: [`Opened wa.me for ${waPhone}`],
                 };
             }
 
-            // ---- App Launch ----
+            // ---- "Open WhatsApp" (just launch, no message) ----
             const launchMatch = input.match(/^(?:open|launch|start|run)\s+(.+)$/i);
             if (launchMatch) {
-                let target = launchMatch[1].trim().toLowerCase();
+                const target = launchMatch[1].trim().toLowerCase();
+
+                // Special case: open whatsapp via browser if no bridge
+                if (target === 'whatsapp' || target.includes('whatsapp')) {
+                    const bridgeCheck = await BridgeService.checkBridgeAvailable();
+                    if (bridgeCheck.available) {
+                        const res = await BridgeService.launchApp(target);
+                        if (res.success) {
+                            return {
+                                text: `Launched WhatsApp on your computer.`,
+                                toolExecuted: true,
+                                toolLogs: [`Launched WhatsApp via bridge`],
+                            };
+                        }
+                    }
+
+                    // Browser fallback
+                    if (typeof window !== 'undefined') {
+                        window.open('https://web.whatsapp.com', '_blank');
+                    }
+                    return {
+                        text: `Opening WhatsApp Web in your browser.`,
+                        cardPayload: {
+                            title: 'WhatsApp Web',
+                            googleUrl: 'https://web.whatsapp.com',
+                            youtubeUrl: null,
+                            query: 'WhatsApp Web',
+                        },
+                        toolExecuted: true,
+                        toolLogs: ['Opened WhatsApp Web in browser'],
+                    };
+                }
+
+                // For other apps, check if bridge is available
+                const bridgeCheck = await BridgeService.checkBridgeAvailable();
+                if (!bridgeCheck.available) {
+                    return {
+                        text: bridgeCheck.isLocal
+                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
+                            : `Launching "${target}" requires the Desktop Bridge running on your local machine. Run the app locally with the bridge for full functionality.`,
+                        toolExecuted: false,
+                        toolLogs: ['Desktop Bridge unavailable'],
+                    };
+                }
+
                 const appAliases = {
                     'vs code': 'vscode', 'code': 'vscode', 'editor': 'vscode',
                     'terminal': 'terminal', 'cmd': 'terminal', 'command prompt': 'terminal',
                     'powershell': 'powershell', 'notepad': 'notepad', 'calculator': 'calc',
                     'calc': 'calc', 'chrome': 'chrome', 'browser': 'msedge', 'edge': 'msedge',
-                    'spotify': 'spotify', 'slack': 'slack', 'whatsapp': 'whatsapp',
+                    'spotify': 'spotify', 'slack': 'slack',
                 };
                 const resolvedApp = appAliases[target] || target.replace(/[^a-z0-9_-]/g, '');
 
                 if (onStatusChange) onStatusChange(`Executing: Launch ${resolvedApp}`);
                 const res = await BridgeService.launchApp(resolvedApp);
 
-                context.lastIntent = 'SYSTEM_ACTION';
                 if (res.success) {
                     return {
                         text: `Launched ${resolvedApp} on your computer via Desktop Bridge.`,
@@ -1010,6 +1072,17 @@ const INTENT_CATEGORIES = [
 
             // ---- Email Draft ----
             if (/\b(email|mail|draft email|send email|write email)\b/i.test(lower)) {
+                const bridgeCheck = await BridgeService.checkBridgeAvailable();
+                if (!bridgeCheck.available) {
+                    return {
+                        text: bridgeCheck.isLocal
+                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
+                            : `Email drafting requires the Desktop Bridge. Run the app locally for this feature.`,
+                        toolExecuted: false,
+                        toolLogs: ['Desktop Bridge unavailable'],
+                    };
+                }
+
                 const emailToMatch = input.match(/\bto\s+([^\s@]+@[^\s@]+\.[^\s@]+|[a-zA-Z0-9]+)\b/i);
                 const recipient = emailToMatch ? emailToMatch[1] : '';
                 const subjectMatch = input.match(/subject\s+["']?([^"']+)["']?/i);
@@ -1021,7 +1094,6 @@ const INTENT_CATEGORIES = [
                     body: `Hello,\n\nDraft created from your local Charlie AI command dashboard.\n\nBest regards.`,
                 });
 
-                context.lastIntent = 'SYSTEM_ACTION';
                 return {
                     text: res.success ? `Opened email draft for "${subject}".` : `Could not open mail client via Desktop Bridge.`,
                     toolExecuted: true,
@@ -1031,6 +1103,17 @@ const INTENT_CATEGORIES = [
 
             // ---- System Status ----
             if (/\b(system status|hardware|clear logs|system health|ram|cpu)\b/i.test(lower)) {
+                const bridgeCheck = await BridgeService.checkBridgeAvailable();
+                if (!bridgeCheck.available) {
+                    return {
+                        text: bridgeCheck.isLocal
+                            ? `Desktop Bridge is not running. Start it locally: node desktop-bridge/server.js`
+                            : `System status requires the Desktop Bridge. Run the app locally for this feature.`,
+                        toolExecuted: false,
+                        toolLogs: ['Desktop Bridge unavailable'],
+                    };
+                }
+
                 if (onStatusChange) onStatusChange('Fetching System Logs...');
                 const res = await BridgeService.getSystemStatus();
                 if (res.success && res.data) {

@@ -897,18 +897,15 @@ const INTENT_CATEGORIES = [
         priority: 40,
         keywords: ['open', 'launch', 'start', 'run', 'email', 'mail', 'draft', 'system', 'status', 'health', 'ram', 'cpu', 'terminal', 'code', 'whatsapp', 'send', 'text', 'message'],
         patterns: [
-            // Combined: "open whatsapp and send [message] to [phone]" (any variation)
-            /^(?:open|launch|start|run)\s+(?:whatsapp|wa)\s+and\s+send/i,
-            // App launch (simple — must be just an app name, no trailing "and")
-            /^(?:open|launch|start|run)\s+(?!.*\b(?:and|to)\b)(.+)$/i,
-            /^(?:open|launch|start|run)\s+(.+?)\s+only$/i,
+            // App launch (simple app name)
+            /^(?:open|launch|start|run)\s+(.+)$/i,
             // WhatsApp send — many variants
             /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^send\s+(?:a\s+)?whatsapp\s+(?:message\s+)?(?:to\s+)?(\+?\d[\d\s\-\(\)]{7,}\d)\s+(?:saying|with|text|that)\s+(.+)$/i,
-            // Broad catch-all: "send this message to this no. [phone] : [message]"
+            // Broad catch-all: "send this message to this no."
             /^(?:send|text|message)\s+.+/i,
-            // "whatsapp this message to this no. [phone] : [message]"
+            // "whatsapp this message to this no."
             /^whatsapp\s+.+/i,
             // Email drafting
             /\b(email|mail|draft email|send email|write email)\b/i,
@@ -919,7 +916,6 @@ const INTENT_CATEGORIES = [
             // ---- Check if Desktop Bridge is available before any system action ----
             const bridgeCheck = await BridgeService.checkBridgeAvailable();
             if (!bridgeCheck.available) {
-                // Bridge unavailable — provide a clear, helpful message
                 context.lastIntent = 'SYSTEM_ACTION';
                 return {
                     text: bridgeCheck.error,
@@ -928,62 +924,9 @@ const INTENT_CATEGORIES = [
                 };
             }
 
-            // Declare phone/message variables at function scope so all branches can use them
+            // ---- WhatsApp Phone/Message extraction (shared logic) ----
             let waPhone = null;
             let waMessage = null;
-
-            // ---- Combined: "open whatsapp and send [message] to [phone]" or any "open whatsapp and send..." variation ----
-            const combinedMatch = input.match(/^(?:open|launch|start|run)\s+(?:whatsapp|wa)\s+and\s+send/i);
-            if (combinedMatch) {
-                // Extract phone number — look for digits with optional + prefix, min 10 digits
-                const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
-                const phoneMatch = input.match(phoneRegex);
-                if (phoneMatch) {
-                    waPhone = phoneMatch[1].trim();
-                    // Message is everything after the colon/semicolon, OR after "to this number/phone/no" if no colon
-                    const afterColonMatch = input.match(/[:\;]\s*(.+?)$/);
-                    if (afterColonMatch) {
-                        waMessage = afterColonMatch[1].trim();
-                    } else {
-                        // If no colon, message is between "send" and "to"
-                        const msgBetween = input.match(/send\s+(?:this\s+)?(?:message\s+)?(.+?)\s+to\s+/i);
-                        if (msgBetween) {
-                            waMessage = msgBetween[1].trim();
-                        } else {
-                            // Fallback: message is everything after phone-related keywords
-                            const afterToMatch = input.match(/(?:send|text|message)\s+(?:this\s+)?(?:message\s+)?(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*/i);
-                            if (afterToMatch) {
-                                waMessage = afterToMatch[1].trim();
-                            }
-                        }
-                    }
-                    // Clean up any trailing "to this number/phone" remnants in message
-                    if (waMessage) {
-                        waMessage = waMessage.replace(/\s+to\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*$/i, '').trim();
-                    }
-                }
-            }
-
-            if (waPhone && waMessage) {
-                if (onStatusChange) onStatusChange(`Sending WhatsApp message...`);
-                const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
-                context.lastIntent = 'SYSTEM_ACTION';
-                if (res.success) {
-                    return {
-                        text: `WhatsApp message sent "${waMessage}" to ${waPhone}.`,
-                        toolExecuted: true,
-                        toolLogs: [`Sent WhatsApp: ${waMessage} to ${waPhone}`],
-                    };
-                }
-                return {
-                    text: `Attempted to send WhatsApp message. ${res.error || 'Desktop Bridge helper not responding at localhost:3001.'}`,
-                    toolExecuted: true,
-                    toolLogs: [`Failed sending WhatsApp to ${waPhone}`],
-                };
-            }
-
-            // ---- WhatsApp Send Message (standalone send commands) ----
-            // Extract phone and message using flexible approach
             const phoneRegex = /(\+?\d[\d\s\-\(\)]{8,}\d)/;
             const phoneMatch = input.match(phoneRegex);
             if (phoneMatch && /^(?:send|text|message|whatsapp)/i.test(lower)) {
@@ -995,29 +938,46 @@ const INTENT_CATEGORIES = [
                     const msgBetween = input.match(/send\s+(?:this\s+)?(?:message\s+)?(.+?)\s+to\s+/i);
                     if (msgBetween) {
                         waMessage = msgBetween[1].trim();
+                    } else {
+                        const afterToMatch = input.match(/(?:send|text|message)\s+(?:this\s+)?(?:message\s+)?(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*/i);
+                        if (afterToMatch) {
+                            waMessage = afterToMatch[1].trim();
+                        }
                     }
+                }
+                // Clean up trailing "to this number/phone" in message
+                if (waMessage) {
+                    waMessage = waMessage.replace(/\s+to\s+(?:this\s+)?(?:number|phone|no\.?|contact|whatsapp)\s*$/i, '').trim();
                 }
             }
 
+            // ---- WhatsApp Send (if we have phone + message) ----
             if (waPhone && waMessage) {
-                if (onStatusChange) onStatusChange(`Sending WhatsApp message...`);
+                if (onStatusChange) onStatusChange(`Sending WhatsApp message to ${waPhone}...`);
                 const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
                 context.lastIntent = 'SYSTEM_ACTION';
                 if (res.success) {
                     return {
-                        text: `WhatsApp message sent "${waMessage}" to ${waPhone}.`,
+                        text: `WhatsApp message sent to ${waPhone}.`,
                         toolExecuted: true,
-                        toolLogs: [`Sent WhatsApp: ${waMessage} to ${waPhone}`],
+                        toolLogs: [`Sent WhatsApp to ${waPhone}: ${waMessage}`],
+                    };
+                }
+                if (res.needsQr) {
+                    return {
+                        text: `WhatsApp needs authentication. Please open ${BridgeService.getBridgeUrl()}/wa-qr in your browser, scan the QR code with your phone's WhatsApp, then try again.`,
+                        toolExecuted: false,
+                        toolLogs: ['WhatsApp QR authentication needed'],
                     };
                 }
                 return {
-                    text: `Attempted to send WhatsApp message. ${res.error || 'Desktop Bridge helper not responding at localhost:3001.'}`,
+                    text: `Could not send WhatsApp message: ${res.error || 'Desktop Bridge helper not responding.'}`,
                     toolExecuted: true,
-                    toolLogs: [`Failed sending WhatsApp to ${waPhone}`],
+                    toolLogs: [`Failed sending WhatsApp to ${waPhone}: ${res.error}`],
                 };
             }
 
-            // ---- App Launch (simple app name only) ----
+            // ---- App Launch ----
             const launchMatch = input.match(/^(?:open|launch|start|run)\s+(.+)$/i);
             if (launchMatch) {
                 let target = launchMatch[1].trim().toLowerCase();
@@ -1075,7 +1035,7 @@ const INTENT_CATEGORIES = [
                 const res = await BridgeService.getSystemStatus();
                 if (res.success && res.data) {
                     return {
-                        text: `System Status: Operating System ${res.data.platform} (${res.data.arch}), ${res.data.cpus} CPUs, ${res.data.freeMem} free RAM out of ${res.data.totalMem}.`,
+                        text: `System Status: ${res.data.cpus} CPUs, ${res.data.freeMem} free RAM out of ${res.data.totalMem}.`,
                         toolExecuted: true,
                     };
                 }

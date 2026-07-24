@@ -11,20 +11,37 @@ export class BridgeService {
   }
 
   /**
-   * Check if the Desktop Bridge server is reachable.
-   * Returns an object with { available, error }.
-   * Note: This works both locally and from deployed environments (Vercel, etc.)
-   * because fetch to localhost always refers to the user's own machine.
+   * Detect if the app is running on a local/development environment
+   * vs. a deployed cloud environment (Vercel, etc.).
+   */
+  static isLocalEnvironment() {
+    if (typeof window === 'undefined') return false;
+    const hostname = window.location.hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  }
+
+  /**
+   * Check if the Desktop Bridge is reachable AND the environment is local.
+   * Returns an object with { available, isLocal, error }.
    */
   static async checkBridgeAvailable() {
+    const isLocal = this.isLocalEnvironment();
+    if (!isLocal) {
+      return {
+        available: false,
+        isLocal: false,
+        error: 'Running in a deployed (cloud) environment. Desktop Bridge works only when running the app on your local machine.',
+      };
+    }
     const health = await this.checkHealth();
     if (health.status === 'offline') {
       return {
         available: false,
-        error: 'Desktop Bridge server is not running on your local machine. To use system actions (opening apps, sending WhatsApp, etc.), start the helper server in your terminal:\n\nnode desktop-bridge/server.js\n\nThen try again once the server is running on port 3001.',
+        isLocal: true,
+        error: 'Desktop Bridge server is not running. Start it locally with: node desktop-bridge/server.js',
       };
     }
-    return { available: true, error: null };
+    return { available: true, isLocal: true, error: null };
   }
 
   static async checkHealth() {
@@ -68,7 +85,6 @@ export class BridgeService {
   }
 
   static async sendWhatsApp(phone, message) {
-    // Try the dedicated background WhatsApp endpoint first (whatsapp-web.js)
     const url = this.getBridgeUrl();
     try {
       const response = await fetch(`${url}/whatsapp/send`, {
@@ -76,23 +92,26 @@ export class BridgeService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, message })
       });
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        return { success: false, error: 'Invalid response from Desktop Bridge server' };
+      }
       if (data.success) {
         return { ...data, background: true };
       }
-      // If WhatsApp client not ready, return the QR needed status
-      if (data.waStatus === 'qr_needed') {
-        return {
-          success: false,
-          error: data.error,
-          waStatus: 'qr_needed',
-          needsQr: true,
-        };
-      }
-      return data;
+      return {
+        success: false,
+        error: data.error || 'Unknown error sending WhatsApp message',
+        waStatus: data.waStatus || 'unknown',
+        needsQr: data.waStatus === 'qr_needed',
+      };
     } catch (err) {
-      // Fallback to old execute method
-      return this.executeCommand({ command: 'send_whatsapp', phone, message });
+      return {
+        success: false,
+        error: 'Could not connect to Desktop Bridge. Make sure it is running (node desktop-bridge/server.js).',
+      };
     }
   }
 

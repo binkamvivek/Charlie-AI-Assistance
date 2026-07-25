@@ -109,6 +109,50 @@ function handleAction(action, params) {
     return createJsonResponse({ status: 'success', action: 'marked_sent' });
   }
 
+  // ============= WhatsApp Contacts (Saved Numbers) =============
+
+  if (action === 'save_contact') {
+    const sheet = ss.getSheetByName('WhatsApp_Contacts');
+    const nickname = (params.nickname || '').trim();
+    const phone = (params.phone || '').trim();
+    const country = (params.country || '').trim();
+    if (nickname && phone) {
+      upsertContact(sheet, nickname, phone, country);
+    }
+    return createJsonResponse({ status: 'success', action: 'contact_saved', nickname: nickname, phone: phone });
+  }
+
+  if (action === 'get_contacts') {
+    const sheet = ss.getSheetByName('WhatsApp_Contacts');
+    const contacts = getSheetData(sheet);
+    return createJsonResponse({ status: 'success', data: contacts || [] });
+  }
+
+  if (action === 'delete_contact') {
+    const sheet = ss.getSheetByName('WhatsApp_Contacts');
+    const nickname = (params.nickname || '').trim();
+    if (sheet && nickname) {
+      deleteContact(sheet, nickname);
+    }
+    return createJsonResponse({ status: 'success', action: 'contact_deleted', nickname: nickname });
+  }
+
+  if (action === 'find_contact') {
+    const sheet = ss.getSheetByName('WhatsApp_Contacts');
+    const nickname = (params.nickname || '').trim();
+    let phone = '';
+    let country = '';
+    if (sheet && nickname) {
+      const contacts = getSheetData(sheet);
+      const found = contacts.find(c => (c.Nickname || '').toString().toLowerCase() === nickname.toLowerCase());
+      if (found) {
+        phone = found.Phone || '';
+        country = found.Country || '';
+      }
+    }
+    return createJsonResponse({ status: 'success', found: !!phone, nickname: nickname, phone: phone, country: country });
+  }
+
   return createJsonResponse({ status: 'error', message: 'Unknown action: ' + action });
 }
 
@@ -117,7 +161,8 @@ function initSheets(ss) {
     { name: 'Identity_Facts', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
     { name: 'Interests_Log', headers: ['Timestamp', 'Topic', 'Source', 'URL'] },
     { name: 'Task_Routines', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
-    { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status', 'Queued_At'] }
+    { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status', 'Queued_At'] },
+    { name: 'WhatsApp_Contacts', headers: ['Nickname', 'Phone', 'Country', 'Saved_At'] }
   ];
 
   tabs.forEach(tab => {
@@ -209,6 +254,35 @@ function markMessageSent(sheet, phone) {
         values[i][3] && values[i][3].toString().toLowerCase() === 'pending') {
       sheet.getRange(i + 1, 4).setValue('sent');
       sheet.getRange(i + 1, 5).setValue(now);
+    }
+  }
+}
+
+function upsertContact(sheet, nickname, phone, country) {
+  const values = sheet.getDataRange().getValues();
+  const now = new Date().toISOString();
+  let foundRow = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][0] && values[i][0].toString().toLowerCase() === nickname.toString().toLowerCase()) {
+      foundRow = i + 1;
+      break;
+    }
+  }
+  if (foundRow > 0) {
+    sheet.getRange(foundRow, 2).setValue(phone);
+    sheet.getRange(foundRow, 3).setValue(country || '');
+    sheet.getRange(foundRow, 4).setValue(now);
+  } else {
+    sheet.appendRow([nickname, phone, country || '', now]);
+  }
+}
+
+function deleteContact(sheet, nickname) {
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][0] && values[i][0].toString().toLowerCase() === nickname.toString().toLowerCase()) {
+      sheet.deleteRow(i + 1);
+      break;
     }
   }
 }

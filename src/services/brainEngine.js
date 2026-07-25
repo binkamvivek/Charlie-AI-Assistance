@@ -977,6 +977,62 @@ const INTENT_CATEGORIES = [
                 if (waMessage === '') waMessage = null;
             }
 
+            // ---- Save Contact: "save [name]'s number as [phone]" or "save [name] as [phone]" ----
+            const saveContactMatch = input.match(/^save\s+(.+?)(?:'s)?\s*(?:number|contact|phone|as)\s+(?:as\s+)?(\+?\d[\d\s\-\(\)]{8,}\d)/i);
+            if (saveContactMatch) {
+                const nickname = saveContactMatch[1].trim().replace(/'s$/, '').trim();
+                const phone = saveContactMatch[2].trim();
+                if (onStatusChange) onStatusChange(`Saving contact: ${nickname}`);
+                await SheetsService.saveContact(nickname, phone);
+                return {
+                    text: `Got it! I've saved "${nickname}" with number ${phone}. From now on, you can just say "send message to ${nickname}".`,
+                    toolExecuted: true,
+                    toolLogs: [`Saved contact: ${nickname} → ${phone}`],
+                };
+            }
+
+            // ---- Send to Contact by Name: "send hello to mom" (instead of a number) ----
+            const sendToContactMatch = input.match(/^(?:send|text|message)\s+(.+?)\s+to\s+([a-zA-Z\s]+)$/i);
+            if (sendToContactMatch) {
+                const possibleMessage = sendToContactMatch[1].trim();
+                const possibleName = sendToContactMatch[2].trim().toLowerCase();
+
+                // Only treat as contact lookup if the "to" target is NOT a phone number
+                if (!/^\+?\d[\d\s\-\(\)]{7,}\d$/.test(possibleName.replace(/\s/g, ''))) {
+                    // This might be a contact name — look it up
+                    const contactResult = await SheetsService.findContact(possibleName);
+                    if (contactResult.found) {
+                        waPhone = contactResult.phone;
+                        waMessage = possibleMessage;
+                        if (onStatusChange) onStatusChange(`Found contact "${contactResult.nickname}": ${waPhone}`);
+                    } else {
+                        // Not a recognized contact — might just be a phrasing issue
+                        // Fall through to normal phone-based extraction
+                        if (onStatusChange) onStatusChange(`Contact "${possibleName}" not found. If you haven't saved it yet, say "save ${possibleName}'s number as [their number]"`);
+                        return {
+                            text: `I couldn't find a contact named "${possibleName}". You can save it first by saying "save ${possibleName}'s number as [their phone number]".`,
+                            toolExecuted: false,
+                        };
+                    }
+                }
+            }
+
+            // ---- List Contacts ----
+            if (/^(?:list|show|get)\s+(?:my\s+)?(?:contacts|saved numbers|saved contacts)\b/i.test(lower)) {
+                const contacts = await SheetsService.getContacts();
+                if (contacts && contacts.length > 0) {
+                    const contactList = contacts.map(c => `  • ${c.Nickname || c.nickname}: ${c.Phone || c.phone}`).join('\n');
+                    return {
+                        text: `Here are your saved contacts:\n${contactList}\n\nYou can send a message by saying "send [message] to [name]".`,
+                        toolExecuted: false,
+                    };
+                }
+                return {
+                    text: `You don't have any saved contacts yet. Save one by saying "save [name]'s number as [phone number]".`,
+                    toolExecuted: false,
+                };
+            }
+
             // ---- WhatsApp: send-or-queue flow ----
             if (waPhone && waMessage) {
                 // Check if bridge is available

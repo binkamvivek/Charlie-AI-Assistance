@@ -162,10 +162,131 @@ export class SheetsService {
   }
 
   /**
-   * Log a search/activity keyword to Interests_Log.
-   * Used by intentHandler for web search queries.
-   */
+     * Log a search/activity keyword to Interests_Log.
+     * Used by intentHandler for web search queries.
+     */
   static async logActivity(topic, source = 'Voice/Search Query') {
     return this.saveFact('Interests_Log', topic, source, new Date().toLocaleString());
+  }
+
+  // ============= WhatsApp Contacts (Saved Numbers) =============
+
+  /**
+   * Save a contact nickname → phone number mapping.
+   * @param {string} nickname - The contact's name/nickname
+   * @param {string} phone - The phone number (with country code)
+   * @param {string} [country=''] - Optional country hint
+   */
+  static async saveContact(nickname, phone, country = '') {
+    const webAppUrl = this.getWebAppUrl();
+    // Also save to localStorage for quick offline access
+    const contactsKey = 'charlie_whatsapp_contacts_v1';
+    let contacts = {};
+    try {
+      const stored = localStorage.getItem(contactsKey);
+      if (stored) contacts = JSON.parse(stored);
+    } catch (e) { }
+    contacts[nickname.toLowerCase()] = { nickname, phone, country, savedAt: new Date().toISOString() };
+    localStorage.setItem(contactsKey, JSON.stringify(contacts));
+
+    if (webAppUrl) {
+      try {
+        const params = new URLSearchParams({
+          action: 'save_contact',
+          nickname,
+          phone,
+          country: country || '',
+          _t: Date.now()
+        });
+        await fetch(`${webAppUrl}?${params.toString()}`);
+        console.log(`[SheetsService] Contact saved: ${nickname} → ${phone}`);
+      } catch (err) {
+        console.warn('[SheetsService] Contact save to Sheets failed:', err);
+      }
+    }
+    return { success: true, nickname, phone };
+  }
+
+  /**
+   * Find a contact by nickname.
+   * @param {string} nickname - The contact name to look up
+   * @returns {Promise<{found: boolean, nickname: string, phone: string, country: string}>}
+   */
+  static async findContact(nickname) {
+    // First check localStorage cache
+    const contactsKey = 'charlie_whatsapp_contacts_v1';
+    try {
+      const stored = localStorage.getItem(contactsKey);
+      if (stored) {
+        const contacts = JSON.parse(stored);
+        const lower = nickname.toLowerCase();
+        if (contacts[lower]) {
+          return { found: true, ...contacts[lower] };
+        }
+      }
+    } catch (e) { }
+
+    // Fallback to Google Sheets
+    const webAppUrl = this.getWebAppUrl();
+    if (webAppUrl) {
+      try {
+        const params = new URLSearchParams({
+          action: 'find_contact',
+          nickname,
+          _t: Date.now()
+        });
+        const response = await fetch(`${webAppUrl}?${params.toString()}`);
+        const data = await response.json();
+        if (data.status === 'success' && data.found) {
+          // Cache it locally
+          try {
+            const stored = localStorage.getItem(contactsKey);
+            const contacts = stored ? JSON.parse(stored) : {};
+            contacts[nickname.toLowerCase()] = { nickname: data.nickname, phone: data.phone, country: data.country || '', savedAt: new Date().toISOString() };
+            localStorage.setItem(contactsKey, JSON.stringify(contacts));
+          } catch (e) { }
+          return { found: true, nickname: data.nickname, phone: data.phone, country: data.country || '' };
+        }
+      } catch (err) {
+        console.warn('[SheetsService] Contact lookup failed:', err);
+      }
+    }
+    return { found: false, nickname, phone: '', country: '' };
+  }
+
+  /**
+   * Get all saved contacts.
+   * @returns {Promise<Array<{nickname: string, phone: string, country: string}>>}
+   */
+  static async getContacts() {
+    const webAppUrl = this.getWebAppUrl();
+    if (webAppUrl) {
+      try {
+        const params = new URLSearchParams({ action: 'get_contacts', _t: Date.now() });
+        const response = await fetch(`${webAppUrl}?${params.toString()}`);
+        const data = await response.json();
+        if (data.status === 'success' && data.data) {
+          // Update localStorage cache
+          const contactsMap = {};
+          data.data.forEach(c => {
+            const key = (c.Nickname || '').toLowerCase();
+            if (key) contactsMap[key] = { nickname: c.Nickname, phone: c.Phone, country: c.Country || '', savedAt: c.Saved_At || new Date().toISOString() };
+          });
+          localStorage.setItem('charlie_whatsapp_contacts_v1', JSON.stringify(contactsMap));
+          return data.data;
+        }
+      } catch (err) {
+        console.warn('[SheetsService] Get contacts failed:', err);
+      }
+    }
+    // Fallback to localStorage
+    try {
+      const stored = localStorage.getItem('charlie_whatsapp_contacts_v1');
+      if (stored) {
+        const contactsMap = JSON.parse(stored);
+        return Object.values(contactsMap);
+      }
+    } catch (e) { }
+    return [];
   }
 }

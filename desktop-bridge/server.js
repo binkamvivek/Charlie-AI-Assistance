@@ -11,7 +11,7 @@ const app = express();
 const PORT = 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // ============================================================================
 // In-Memory WhatsApp Message Queue
@@ -66,6 +66,39 @@ async function removeFromSheetsBackup(phone, message) {
 }
 
 /**
+ * Load queued messages from Google Sheets (for crash recovery).
+ */
+async function loadQueueFromSheets() {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({ action: 'get_queued_messages', _t: Date.now() });
+    const response = await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+    const data = await response.json();
+    if (data.status === 'success' && data.data) {
+      let loaded = 0;
+      for (const item of data.data) {
+        const phone = item.Phone || '';
+        const message = item.Message || '';
+        const status = (item.Status || '').toLowerCase();
+        if (phone && message && status === 'pending') {
+          // Avoid duplicates
+          const exists = messageQueue.some(e => e.phone === phone && e.message === message);
+          if (!exists) {
+            messageQueue.push({ phone, message, timestamp: item.Timestamp || new Date().toISOString() });
+            loaded++;
+          }
+        }
+      }
+      if (loaded > 0) {
+        console.log(`[Queue] Loaded ${loaded} pending message(s) from Google Sheets backup.`);
+      }
+    }
+  } catch (e) {
+    console.log('  [Queue] Could not load from Sheets:', e.message);
+  }
+}
+
+/**
  * Add a message to the queue. Returns the queue length.
  */
 function addToQueue(phone, message) {
@@ -98,7 +131,6 @@ async function flushQueue() {
     const entry = messageQueue.shift();
     try {
       // Format phone: remove everything except digits, then add @c.us
-      // whatsapp-web.js expects just digits (no + prefix) for the chat ID
       const cleanPhone = entry.phone.replace(/[^\d]/g, '');
       const chatId = cleanPhone + '@c.us';
 
@@ -112,8 +144,7 @@ async function flushQueue() {
       await removeFromSheetsBackup(entry.phone, entry.message);
     } catch (err) {
       const errorMsg = err && err.message ? err.message : (err ? String(err) : 'Unknown error');
-      console.error(`[Queue] ❌ Failed to send to ${entry.phone}:`, errorMsg);
-      console.error(`[Queue] Full error object:`, err);
+      console.error(`[Queue] Failed to send to ${entry.phone}:`, errorMsg);
       failed.push({ phone: entry.phone, message: entry.message, error: errorMsg });
     }
   }
@@ -194,17 +225,26 @@ function initWhatsAppClient() {
   waClient.on('ready', () => {
     waStatus = 'ready';
     waError = null;
+    currentQrCode = null;
     console.log('✅ [WhatsApp] Background client is ready! Messages will be sent silently.');
 
     // Auto-send any queued messages
-    flushQueue().then(result => {
-      if (result.sent > 0) {
-        console.log(`✅ [Queue] Auto-sent ${result.sent} queued message(s) after login.`);
-      }
-      if (result.failed.length > 0) {
-        console.warn(`⚠️ [Queue] ${result.failed.length} queued message(s) failed.`);
-      }
-    });
+    if (messageQueue.length > 0) {
+      console.log(`[Queue] Found ${messageQueue.length} queued message(s). Auto-sending now...`);
+      flushQueue().then(result => {
+        if (result.sent > 0) {
+          console.log(`✅ [Queue] Auto-sent ${result.sent} queued message(s) after login.`);
+        }
+        if (result.failed.length > 0) {
+          console.warn(`⚠️ [Queue] ${result.failed.length} queued message(s) failed.`);
+          result.failed.forEach(f => {
+            console.warn(`  Failed: ${f.phone} - ${f.error}`);
+          });
+        }
+      });
+    } else {
+      console.log('[Queue] No queued messages to send.');
+    }
   });
 
   waClient.on('authenticated', () => {
@@ -222,7 +262,6 @@ function initWhatsAppClient() {
     console.log('[WhatsApp] Disconnected:', reason);
 
     if (reason === 'LOGOUT') {
-      // Session was revoked — destroy old client and clean up session data
       console.log('[WhatsApp] Session was logged out. Cleaning up and preparing for fresh auth...');
       try {
         waClient.destroy();
@@ -261,9 +300,6 @@ function initWhatsAppClient() {
     console.error('❌ [WhatsApp] Initialization error:', err.message);
   });
 }
-
-// Initialize WhatsApp client on startup
-initWhatsAppClient();
 
 // ============================================================================
 // System app mapping for Windows / OS
@@ -312,6 +348,7 @@ app.get('/health', (req, res) => {
     platform: process.platform,
     hostname: os.hostname(),
     waStatus,
+    queueLength: messageQueue.length,
     timestamp: new Date().toISOString()
   });
 });
@@ -322,17 +359,58 @@ app.get('/whatsapp/status', (req, res) => {
     status: waStatus,
     ready: waStatus === 'ready',
     error: waError,
+    queueLength: messageQueue.length,
   });
 });
 
-// WhatsApp QR scan page — embedded in the bridge itself (no second client needed)
+// WhatsApp QR scan page — embedded in the bridge itself
 app.get('/whatsapp/qr', async (req, res) => {
   if (waStatus === 'ready') {
-    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>WhatsApp - Charlie AI</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}.container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155;box-shadow:0 20px 60px rgba(0,0,0,0.5)}h1{font-size:24px;color:#38bdf8}.status{background:#d1fae5;color:#065f46;padding:12px 20px;border-radius:12px;font-weight:500}</style></head><body><div class="container"><h1>✅ WhatsApp Connected</h1><p class="status">Your WhatsApp is already authenticated! Messages will be sent silently in the background.</p></div>  </div>
-</body></html>`);
+    // If already ready, show connected page with auto-close
+    return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp - Charlie AI</title>
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}
+    .container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+    h1{font-size:24px;color:#38bdf8}
+    .status{background:#d1fae5;color:#065f46;padding:12px 20px;border-radius:12px;font-weight:500}
+  </style>
+  <script>
+    setTimeout(() => { window.close(); }, 1500);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <h1>✅ WhatsApp Connected</h1>
+    <p class="status">Your WhatsApp is already authenticated! This tab will close automatically.</p>
+  </div>
+</body>
+</html>`);
   }
   if (!currentQrCode) {
-    return res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>WhatsApp QR - Charlie AI</title><meta http-equiv="refresh" content="2"><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}.container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155}</style></head><body><div class="container"><h1 style="color:#38bdf8">⏳ Generating QR Code...</h1><p style="color:#94a3b8">Please wait, the QR code will appear shortly...</p></div></body></html>`);
+    return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp QR - Charlie AI</title>
+  <meta http-equiv="refresh" content="2">
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;display:flex;justify-content:center;align-items:center;color:#e2e8f0}
+    .container{background:#1e293b;border-radius:24px;padding:40px;max-width:500px;width:90%;text-align:center;border:1px solid #334155}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 style="color:#38bdf8">⏳ Generating QR Code...</h1>
+    <p style="color:#94a3b8">Please wait, the QR code will appear shortly...</p>
+  </div>
+</body>
+</html>`);
   }
   try {
     const { default: qrcode } = await import('qrcode');
@@ -383,17 +461,13 @@ app.get('/whatsapp/qr', async (req, res) => {
         const resp = await fetch('/whatsapp/status');
         const data = await resp.json();
         pollCount++;
-        document.getElementById('status-text').textContent = data.ready ? '✅ Connected! Redirecting...' : '⏳ Waiting for scan...';
+        document.getElementById('status-text').textContent = data.ready ? '✅ Connected! Auto-closing...' : '⏳ Waiting for scan...';
         document.getElementById('status-badge').className = data.ready ? 'status connected' : 'status waiting';
         if (data.ready) {
           clearInterval(pollInterval);
-          document.getElementById('status-text').textContent = '✅ WhatsApp Connected! Sending your message...';
+          document.getElementById('status-text').textContent = '✅ WhatsApp Connected! Message being sent...';
           // Close this tab after 1.5 seconds
           setTimeout(() => {
-            // Try to find the opener (dashboard) and redirect it to itself
-            if (window.opener && !window.opener.closed) {
-              window.opener.focus();
-            }
             window.close();
           }, 1500);
         }
@@ -454,23 +528,18 @@ app.get('/qr', (req, res) => {
  * Format phone number for whatsapp-web.js:
  * - Remove all non-digit characters (including +, spaces, dashes)
  * - Append @c.us suffix
- * Example: "+91 888-556-5939" → "918885565939@c.us"
  */
 function formatPhoneForWA(phone) {
   const digits = phone.replace(/[^\d]/g, '');
   return digits + '@c.us';
 }
 
-// WhatsApp send message — SILENTLY in background, no browser windows open
+// WhatsApp send message — SILENTLY in background
 app.post('/whatsapp/send', async (req, res) => {
   const { phone, message } = req.body;
 
-  if (!phone) {
-    return res.status(400).json({ success: false, error: 'Phone number is required' });
-  }
-  if (!message) {
-    return res.status(400).json({ success: false, error: 'Message is required' });
-  }
+  if (!phone) return res.status(400).json({ success: false, error: 'Phone number is required' });
+  if (!message) return res.status(400).json({ success: false, error: 'Message is required' });
 
   if (waStatus !== 'ready') {
     return res.status(503).json({
@@ -512,12 +581,8 @@ app.post('/whatsapp/send', async (req, res) => {
 app.post('/whatsapp/send-or-queue', async (req, res) => {
   const { phone, message } = req.body;
 
-  if (!phone) {
-    return res.status(400).json({ success: false, error: 'Phone number is required' });
-  }
-  if (!message) {
-    return res.status(400).json({ success: false, error: 'Message is required' });
-  }
+  if (!phone) return res.status(400).json({ success: false, error: 'Phone number is required' });
+  if (!message) return res.status(400).json({ success: false, error: 'Message is required' });
 
   // If ready, send immediately
   if (waStatus === 'ready') {
@@ -585,11 +650,9 @@ app.post('/execute', (req, res) => {
 
   // Route WhatsApp commands to the background client
   if (command === 'send_whatsapp') {
-    // Forward to the WhatsApp send handler
     return app._handleWhatsAppSend(req, res);
   }
 
-  // Handlers for specific commands
   if (command === 'launch_app' || command === 'open_app') {
     const appKey = (target || '').trim();
     const sysCmd = getLaunchCommand(appKey);
@@ -639,7 +702,6 @@ app.post('/execute', (req, res) => {
     });
   }
 
-  // Fallback direct command execution for supported safe actions
   if (command === 'raw_shell' && target) {
     exec(target, (error, stdout, stderr) => {
       if (error) {
@@ -694,11 +756,26 @@ app._handleWhatsAppSend = async (req, res) => {
   }
 };
 
+// ============================================================================
 // Start server
-app.listen(PORT, () => {
-  console.log('============================================');
-  console.log(`  🤖 Charlie AI Desktop Bridge`);
-  console.log(`  Running on http://localhost:${PORT}`);
-  console.log(`  WhatsApp: ${waStatus === 'ready' ? '✅ Ready' : '⏳ Initializing...'}`);
-  console.log('============================================');
-});
+// ============================================================================
+async function start() {
+  // Try to load queued messages from Google Sheets backup (if any)
+  await loadQueueFromSheets();
+
+  // Initialize WhatsApp client
+  initWhatsAppClient();
+
+  app.listen(PORT, () => {
+    console.log('============================================');
+    console.log(`  🤖 Charlie AI Desktop Bridge`);
+    console.log(`  Running on http://localhost:${PORT}`);
+    console.log(`  WhatsApp: ${waStatus === 'ready' ? '✅ Ready' : '⏳ Initializing...'}`);
+    if (messageQueue.length > 0) {
+      console.log(`  Queue: ${messageQueue.length} pending message(s)`);
+    }
+    console.log('============================================');
+  });
+}
+
+start();

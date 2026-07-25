@@ -8,6 +8,7 @@
  */
 
 const LOCAL_STORAGE_KEY = 'charlie_memory_facts_v1';
+const LOCAL_CONTACTS_KEY = 'charlie_contacts_v1';
 
 const DEFAULT_FACTS = {
   Identity_Facts: [
@@ -162,103 +163,123 @@ export class SheetsService {
   }
 
   /**
-     * Log a search/activity keyword to Interests_Log.
-     * Used by intentHandler for web search queries.
-     */
+   * Log a search/activity keyword to Interests_Log.
+   * Used by intentHandler for web search queries.
+   */
   static async logActivity(topic, source = 'Voice/Search Query') {
     return this.saveFact('Interests_Log', topic, source, new Date().toLocaleString());
   }
 
-  // ============= WhatsApp Contacts (Saved Numbers) =============
+  // ============================================================================
+  // CONTACTS MANAGEMENT (localStorage + optional Google Sheets sync)
+  // ============================================================================
 
   /**
-   * Save a contact nickname → phone number mapping.
-   * @param {string} nickname - The contact's name/nickname
-   * @param {string} phone - The phone number (with country code)
-   * @param {string} [country=''] - Optional country hint
+   * Get all saved contacts from localStorage.
    */
-  static async saveContact(nickname, phone, country = '') {
-    const webAppUrl = this.getWebAppUrl();
-    // Also save to localStorage for quick offline access
-    const contactsKey = 'charlie_whatsapp_contacts_v1';
-    let contacts = {};
+  static getLocalContacts() {
+    if (typeof window === 'undefined') return [];
+    const stored = localStorage.getItem(LOCAL_CONTACTS_KEY);
+    if (!stored) return [];
     try {
-      const stored = localStorage.getItem(contactsKey);
-      if (stored) contacts = JSON.parse(stored);
-    } catch (e) { }
-    contacts[nickname.toLowerCase()] = { nickname, phone, country, savedAt: new Date().toISOString() };
-    localStorage.setItem(contactsKey, JSON.stringify(contacts));
+      return JSON.parse(stored);
+    } catch (e) {
+      return [];
+    }
+  }
 
+  /**
+   * Save contacts to localStorage.
+   */
+  static saveLocalContacts(contacts) {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(LOCAL_CONTACTS_KEY, JSON.stringify(contacts));
+    }
+  }
+
+  /**
+   * Save a contact (nickname → phone number mapping).
+   * Works offline with localStorage, and syncs to Google Sheets if configured.
+   */
+  static async saveContact(nickname, phone) {
+    const contacts = this.getLocalContacts();
+    const existingIdx = contacts.findIndex(
+      c => c.nickname.toLowerCase() === nickname.toLowerCase()
+    );
+    if (existingIdx >= 0) {
+      contacts[existingIdx].phone = phone;
+      contacts[existingIdx].updatedAt = new Date().toISOString();
+    } else {
+      contacts.push({ nickname, phone, createdAt: new Date().toISOString() });
+    }
+    this.saveLocalContacts(contacts);
+
+    // Sync to Google Sheets
+    const webAppUrl = this.getWebAppUrl();
     if (webAppUrl) {
       try {
         const params = new URLSearchParams({
           action: 'save_contact',
           nickname,
           phone,
-          country: country || '',
           _t: Date.now()
         });
         await fetch(`${webAppUrl}?${params.toString()}`);
-        console.log(`[SheetsService] Contact saved: ${nickname} → ${phone}`);
       } catch (err) {
-        console.warn('[SheetsService] Contact save to Sheets failed:', err);
+        console.warn('[SheetsService] Contact sync to Sheets failed:', err);
       }
     }
-    return { success: true, nickname, phone };
+
+    return { contacts, saved: true };
   }
 
   /**
-   * Find a contact by nickname.
-   * @param {string} nickname - The contact name to look up
-   * @returns {Promise<{found: boolean, nickname: string, phone: string, country: string}>}
+   * Find a contact by nickname (case-insensitive, partial match).
+   * Returns { found: true, phone, nickname } or { found: false }.
    */
   static async findContact(nickname) {
-    // First check localStorage cache
-    const contactsKey = 'charlie_whatsapp_contacts_v1';
-    try {
-      const stored = localStorage.getItem(contactsKey);
-      if (stored) {
-        const contacts = JSON.parse(stored);
-        const lower = nickname.toLowerCase();
-        if (contacts[lower]) {
-          return { found: true, ...contacts[lower] };
-        }
-      }
-    } catch (e) { }
+    const searchName = nickname.toLowerCase().trim();
+    const contacts = this.getLocalContacts();
 
-    // Fallback to Google Sheets
+    // Exact match first
+    const exact = contacts.find(c => c.nickname.toLowerCase() === searchName);
+    if (exact) return { found: true, phone: exact.phone, nickname: exact.nickname };
+
+    // Partial match (nickname starts with search term or vice versa)
+    const partial = contacts.find(c =>
+      c.nickname.toLowerCase().includes(searchName) ||
+      searchName.includes(c.nickname.toLowerCase())
+    );
+    if (partial) return { found: true, phone: partial.phone, nickname: partial.nickname };
+
+    // Try Google Sheets lookup if configured
     const webAppUrl = this.getWebAppUrl();
     if (webAppUrl) {
       try {
-        const params = new URLSearchParams({
-          action: 'find_contact',
-          nickname,
-          _t: Date.now()
-        });
+        const params = new URLSearchParams({ action: 'find_contact', nickname, _t: Date.now() });
         const response = await fetch(`${webAppUrl}?${params.toString()}`);
         const data = await response.json();
         if (data.status === 'success' && data.found) {
-          // Cache it locally
-          try {
-            const stored = localStorage.getItem(contactsKey);
-            const contacts = stored ? JSON.parse(stored) : {};
-            contacts[nickname.toLowerCase()] = { nickname: data.nickname, phone: data.phone, country: data.country || '', savedAt: new Date().toISOString() };
-            localStorage.setItem(contactsKey, JSON.stringify(contacts));
-          } catch (e) { }
-          return { found: true, nickname: data.nickname, phone: data.phone, country: data.country || '' };
+          // Sync found contact to local storage
+          this.saveContact(data.nickname, data.phone);
+          return { found: true, phone: data.phone, nickname: data.nickname };
         }
       } catch (err) {
-        console.warn('[SheetsService] Contact lookup failed:', err);
+        console.warn('[SheetsService] Contact lookup from Sheets failed:', err);
       }
     }
-    return { found: false, nickname, phone: '', country: '' };
+
+    return { found: false };
   }
 
   /**
-   * Get all saved contacts.
-   * @returns {Promise<Array<{nickname: string, phone: string, country: string}>>}
+   * Get all contacts (local + remote merged).
    */
   static async getContacts() {
+    // Start with local
+    let contacts = this.getLocalContacts();
+
+    // Merge with Google Sheets if configured
     const webAppUrl = this.getWebAppUrl();
     if (webAppUrl) {
       try {
@@ -266,27 +287,30 @@ export class SheetsService {
         const response = await fetch(`${webAppUrl}?${params.toString()}`);
         const data = await response.json();
         if (data.status === 'success' && data.data) {
-          // Update localStorage cache
-          const contactsMap = {};
+          // Merge: remote contacts take priority, then add any local-only
+          const remoteMap = {};
+          data.data.forEach(c => { remoteMap[(c.nickname || '').toLowerCase()] = c; });
+          const merged = [];
+          const seen = new Set();
+          // First add all remote contacts
           data.data.forEach(c => {
-            const key = (c.Nickname || '').toLowerCase();
-            if (key) contactsMap[key] = { nickname: c.Nickname, phone: c.Phone, country: c.Country || '', savedAt: c.Saved_At || new Date().toISOString() };
+            merged.push(c);
+            seen.add((c.nickname || '').toLowerCase());
           });
-          localStorage.setItem('charlie_whatsapp_contacts_v1', JSON.stringify(contactsMap));
-          return data.data;
+          // Then add local contacts not already in remote
+          contacts.forEach(c => {
+            if (!seen.has(c.nickname.toLowerCase())) {
+              merged.push(c);
+            }
+          });
+          contacts = merged;
+          this.saveLocalContacts(contacts);
         }
       } catch (err) {
-        console.warn('[SheetsService] Get contacts failed:', err);
+        console.warn('[SheetsService] Contacts fetch from Sheets failed:', err);
       }
     }
-    // Fallback to localStorage
-    try {
-      const stored = localStorage.getItem('charlie_whatsapp_contacts_v1');
-      if (stored) {
-        const contactsMap = JSON.parse(stored);
-        return Object.values(contactsMap);
-      }
-    } catch (e) { }
-    return [];
+
+    return contacts;
   }
 }

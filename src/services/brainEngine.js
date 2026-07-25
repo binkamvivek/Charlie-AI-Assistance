@@ -901,6 +901,8 @@ const INTENT_CATEGORIES = [
         patterns: [
             // App launch
             /^(?:open|launch|start|run)\s+(.+)$/i,
+            // Save contact: "save [name] as [phone]" or "save [name]'s number as [phone]"
+            /^save\s+.+/i,
             // WhatsApp send patterns
             /^(?:send|text|message)\s+(?:whatsapp\s+)?(?:message\s+)?(?:to\s+)?(.+?)\s+(?:to\s+)(\+?\d[\d\s\-\(\)]{7,}\d)$/i,
             /^(?:send|text|message)\s+(.+?)\s+(?:to|at)\s+(?:this\s+)?(?:number|phone|contact|whatsapp)\s+(\+?\d[\d\s\-\(\)]{7,}\d)$/i,

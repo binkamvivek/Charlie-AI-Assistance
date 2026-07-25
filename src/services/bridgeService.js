@@ -12,8 +12,6 @@ export class BridgeService {
 
   /**
    * Check if the Desktop Bridge is reachable via HTTP fetch.
-   * Works from any environment (localhost or deployed) as long as
-   * the user has the bridge running on their machine.
    */
   static async checkBridgeAvailable() {
     const health = await this.checkHealth();
@@ -91,7 +89,6 @@ export class BridgeService {
 
   /**
    * Send WhatsApp message OR queue it if not authenticated.
-   * Returns { success, sent, queued, waStatus, ... }
    */
   static async sendWhatsAppOrQueue(phone, message) {
     const url = this.getBridgeUrl();
@@ -119,17 +116,32 @@ export class BridgeService {
       const response = await fetch(`${url}/whatsapp/queue/flush`, { method: 'POST' });
       return await response.json();
     } catch (err) {
-      return { flushed: false, error: err.message };
+      return { flushed: false, sent: 0, error: err.message };
     }
   }
 
   /**
-   * Poll WhatsApp status until ready, then call onReady callback.
+   * Get the current queue status from the bridge.
+   */
+  static async getWhatsAppQueue() {
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/whatsapp/queue`);
+      return await response.json();
+    } catch (err) {
+      return { queueLength: 0, messages: [], error: err.message };
+    }
+  }
+
+  /**
+   * Poll WhatsApp status until ready, then flush queue and call onReady.
+   * Also calls onPoll callback each poll iteration.
+   * 
    * @param {number} maxAttempts - Max polling attempts (default 300 = 10 min at 2s interval)
    * @param {number} intervalMs - Polling interval in ms (default 2000)
    * @param {Function} onReady - Called with { status: 'ready' } when WhatsApp is ready
    * @param {Function} onPoll - Optional callback each poll attempt
-   * @returns {Promise<void>}
+   * @returns {Promise<Object>} Result object with status
    */
   static async pollWhatsAppUntilReady(maxAttempts = 300, intervalMs = 2000, onReady = () => { }, onPoll = () => { }) {
     const url = this.getBridgeUrl();
@@ -139,17 +151,23 @@ export class BridgeService {
         const data = await response.json();
         onPoll(data);
         if (data.ready) {
+          // WhatsApp is now ready! Flush any queued messages
+          try {
+            const flushResult = await this.flushWhatsAppQueue();
+            console.log('[BridgeService] Queue flush result:', flushResult);
+          } catch (flushErr) {
+            console.warn('[BridgeService] Failed to flush queue after ready:', flushErr);
+          }
           onReady({ status: 'ready' });
-          return;
+          return { status: 'ready' };
         }
       } catch (e) {
-        // Bridge might be temporarily unreachable
         onPoll({ status: 'poll_error', error: e.message });
       }
       await new Promise(resolve => setTimeout(resolve, intervalMs));
     }
-    // Timeout
-    onReady({ status: 'timeout', error: `WhatsApp did not become ready after ${(maxAttempts * intervalMs) / 1000} seconds` });
+    const timeoutResult = { status: 'timeout', error: `WhatsApp did not become ready after ${(maxAttempts * intervalMs) / 1000} seconds` };
+    onReady(timeoutResult);
+    return timeoutResult;
   }
 }
-

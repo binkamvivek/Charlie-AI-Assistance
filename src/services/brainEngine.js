@@ -979,6 +979,42 @@ const INTENT_CATEGORIES = [
                 if (waMessage === '') waMessage = null;
             }
 
+            // ---- Configure Bridge URL: "set bridge url to https://..." or "configure bridge ..." ----
+            const setBridgeMatch = input.match(/^(?:set|configure|change)\s+(?:the\s+)?(?:bridge|desktop\s+bridge|bridge\s+url)\s+(?:to\s+|as\s+)?(.+)$/i);
+            if (setBridgeMatch) {
+                let newUrl = setBridgeMatch[1].trim().replace(/\/+$/, '');
+                if (!/^https?:\/\//i.test(newUrl)) {
+                    newUrl = 'https://' + newUrl;
+                }
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('charlie_bridge_url', newUrl);
+                }
+                if (onStatusChange) onStatusChange(`Bridge URL set to ${newUrl}`);
+                return {
+                    text: `✅ Bridge URL configured to: ${newUrl}\n\nFrom now on, WhatsApp messages and system commands will be routed through this bridge.\nYou can check connectivity by saying "check bridge" or change it anytime.`,
+                    toolExecuted: true,
+                    toolLogs: [`Set bridge URL: ${newUrl}`],
+                };
+            }
+
+            // ---- Check Bridge Status ----
+            if (/^(?:check|test|status)\s+(?:the\s+)?(?:bridge|connection|desktop\s+bridge)\s*$/i.test(lower)) {
+                const bridgeCheck = await BridgeService.checkBridgeAvailable();
+                const currentUrl = BridgeService.getBridgeUrl();
+                if (bridgeCheck.available) {
+                    return {
+                        text: `✅ Bridge is connected!\n  URL: ${currentUrl}\n  Status: Online\n  WhatsApp: ${bridgeCheck.waStatus || 'checking...'}\n\nYou can send WhatsApp messages by saying "send [message] to [name or number]".`,
+                        toolExecuted: false,
+                        toolLogs: [`Bridge check: ${currentUrl} → online`],
+                    };
+                }
+                return {
+                    text: `❌ Bridge is not reachable at ${currentUrl}.\n\nMake sure your bridge server is running. To set a different URL, say "set bridge url to [your-url]".\n\nFor local use, start with: node desktop-bridge/server.js\nFor cloud use, deploy the bridge to Railway and set the URL here.`,
+                    toolExecuted: false,
+                    toolLogs: [`Bridge check: ${currentUrl} → offline`],
+                };
+            }
+
             // ---- Save Contact: "save [name]'s number as [phone]" or "save [name] as [phone]" ----
             const saveContactMatch = input.match(/^save\s+(.+?)(?:'s)?\s*(?:number|contact|phone|as)\s+(?:as\s+)?(\+?\d[\d\s\-\(\)]{8,}\d)/i);
             if (saveContactMatch) {

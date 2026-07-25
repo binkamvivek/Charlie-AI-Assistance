@@ -1,0 +1,4 @@
+node_modules/
+whatsapp-data/
+.wwebjs_cache/
+*.log

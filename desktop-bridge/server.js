@@ -8,9 +8,18 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 
 const app = express();
-const PORT = 3001;
 
-app.use(cors());
+// Port: Railway assigns via PORT env; fallback 3001 for local dev
+const PORT = process.env.PORT || 3001;
+
+// Public URL: used for QR page links shown to the user
+// Set BRIDGE_PUBLIC_URL on Railway so QR links use the correct domain
+const BRIDGE_PUBLIC_URL = process.env.BRIDGE_PUBLIC_URL || `http://localhost:${PORT}`;
+
+// CORS: Allow all origins (frontend may be on Vercel or other domains)
+// Set CORS_ORIGIN for stricter control
+const corsOrigin = process.env.CORS_ORIGIN || '*';
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: '50mb' }));
 
 // ============================================================================
@@ -195,19 +204,26 @@ function initWhatsAppClient() {
   // Clean up stale Puppeteer lock files from previous crashes
   cleanupStaleLocks();
 
+  const puppeteerOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--mute-audio',
+    ],
+  };
+
+  // Railway/cloud: Chromium path set via env var (provided by Nixpacks build)
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    puppeteerOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
   waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: './whatsapp-data' }),
-    puppeteer: {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-extensions',
-        '--mute-audio',
-      ],
-    },
+    puppeteer: puppeteerOptions,
   });
 
   waClient.on('qr', (qr) => {
@@ -218,7 +234,7 @@ function initWhatsAppClient() {
     qrCodeResolvers = [];
     console.log('⚠️  =============================================');
     console.log('⚠️  WhatsApp QR code needed!');
-    console.log('⚠️  Open http://localhost:3001/qr in your browser to scan');
+    console.log(`⚠️  Open ${BRIDGE_PUBLIC_URL}/qr in your browser to scan`);
     console.log('⚠️  =============================================');
   });
 
@@ -766,10 +782,11 @@ async function start() {
   // Initialize WhatsApp client
   initWhatsAppClient();
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log('============================================');
     console.log(`  🤖 Charlie AI Desktop Bridge`);
-    console.log(`  Running on http://localhost:${PORT}`);
+    console.log(`  Running on port ${PORT}`);
+    console.log(`  Public URL: ${BRIDGE_PUBLIC_URL}`);
     console.log(`  WhatsApp: ${waStatus === 'ready' ? '✅ Ready' : '⏳ Initializing...'}`);
     if (messageQueue.length > 0) {
       console.log(`  Queue: ${messageQueue.length} pending message(s)`);

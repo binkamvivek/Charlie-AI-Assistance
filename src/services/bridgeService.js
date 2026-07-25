@@ -4,9 +4,16 @@
 
 export class BridgeService {
   static getBridgeUrl() {
+    // Priority: localStorage override > env var > default
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('charlie_bridge_url') || 'http://localhost:3001';
+      const stored = localStorage.getItem('charlie_bridge_url');
+      if (stored) return stored;
     }
+    try {
+      if (typeof import.meta !== 'undefined' && import.meta.env?.PUBLIC_BRIDGE_URL) {
+        return import.meta.env.PUBLIC_BRIDGE_URL;
+      }
+    } catch (_) { /* import.meta not available in some contexts */ }
     return 'http://localhost:3001';
   }
 
@@ -19,9 +26,15 @@ export class BridgeService {
       return {
         available: false,
         error: 'Desktop Bridge server is not running. Start it with: node desktop-bridge/server.js',
+        waStatus: null,
       };
     }
-    return { available: true, error: null };
+    return {
+      available: true,
+      error: null,
+      waStatus: health.waStatus || 'unknown',
+      queueLength: health.queueLength || 0,
+    };
   }
 
   static async checkHealth() {

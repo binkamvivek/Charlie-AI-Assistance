@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["chromium", "libxshmfence", "libdrm", "libxkbcommon"]
+
+[phases.install]
+cmd = "PUPPETEER_SKIP_DOWNLOAD=true npm install"
+
+[start]
+cmd = "node server.js"

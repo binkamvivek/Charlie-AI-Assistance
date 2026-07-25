@@ -97,19 +97,24 @@ async function flushQueue() {
   while (messageQueue.length > 0) {
     const entry = messageQueue.shift();
     try {
-      let cleanPhone = entry.phone.replace(/[^\d+]/g, '');
-      if (!cleanPhone.startsWith('+')) cleanPhone = '+' + cleanPhone;
-      const chatId = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
+      // Format phone: remove everything except digits, then add @c.us
+      // whatsapp-web.js expects just digits (no + prefix) for the chat ID
+      const cleanPhone = entry.phone.replace(/[^\d]/g, '');
+      const chatId = cleanPhone + '@c.us';
 
+      console.log(`[Queue] Sending to ${chatId}...`);
       const result = await waClient.sendMessage(chatId, entry.message);
-      console.log(`[Queue] Sent to ${cleanPhone} (ID: ${result.id.id})`);
+      const resultId = result && result.id ? result.id.id : 'unknown';
+      console.log(`[Queue] ✅ Sent to ${cleanPhone} (ID: ${resultId})`);
       sent.push(entry.phone);
 
       // Remove from sheets backup
       await removeFromSheetsBackup(entry.phone, entry.message);
     } catch (err) {
-      console.error(`[Queue] Failed to send to ${entry.phone}:`, err.message);
-      failed.push({ phone: entry.phone, message: entry.message, error: err.message });
+      const errorMsg = err && err.message ? err.message : (err ? String(err) : 'Unknown error');
+      console.error(`[Queue] ❌ Failed to send to ${entry.phone}:`, errorMsg);
+      console.error(`[Queue] Full error object:`, err);
+      failed.push({ phone: entry.phone, message: entry.message, error: errorMsg });
     }
   }
 
@@ -445,6 +450,17 @@ app.get('/qr', (req, res) => {
   res.redirect('/whatsapp/qr');
 });
 
+/**
+ * Format phone number for whatsapp-web.js:
+ * - Remove all non-digit characters (including +, spaces, dashes)
+ * - Append @c.us suffix
+ * Example: "+91 888-556-5939" → "918885565939@c.us"
+ */
+function formatPhoneForWA(phone) {
+  const digits = phone.replace(/[^\d]/g, '');
+  return digits + '@c.us';
+}
+
 // WhatsApp send message — SILENTLY in background, no browser windows open
 app.post('/whatsapp/send', async (req, res) => {
   const { phone, message } = req.body;
@@ -466,35 +482,26 @@ app.post('/whatsapp/send', async (req, res) => {
     });
   }
 
-  // Format phone number: remove all non-digit chars except +
-  let cleanPhone = phone.replace(/[^\d+]/g, '');
-  // Ensure it has country code (add @c.us suffix for whatsapp-web.js)
-  if (!cleanPhone.includes('@c.us')) {
-    // If no +, assume it's a full number
-    if (!cleanPhone.startsWith('+')) {
-      cleanPhone = '+' + cleanPhone;
-    }
-    cleanPhone = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
-  }
+  const chatId = formatPhoneForWA(phone);
 
-  console.log(`[WhatsApp] Sending message to ${cleanPhone} in background...`);
+  console.log(`[WhatsApp] Sending message to ${chatId} in background...`);
 
   try {
-    // Send directly — isRegisteredUser is unreliable and can crash
-    const sent = await waClient.sendMessage(cleanPhone, message);
-    console.log(`[WhatsApp] Message sent successfully to ${cleanPhone} (ID: ${sent.id.id})`);
+    const sent = await waClient.sendMessage(chatId, message);
+    const messageId = sent && sent.id ? sent.id.id : 'unknown';
+    console.log(`[WhatsApp] Message sent successfully to ${chatId} (ID: ${messageId})`);
 
     return res.json({
       success: true,
       message: `WhatsApp message sent to ${phone}`,
-      messageId: sent.id.id,
+      messageId,
       background: true,
     });
   } catch (err) {
     console.error(`[WhatsApp] Send failed:`, err);
     return res.status(500).json({
       success: false,
-      error: err.message || 'Failed to send WhatsApp message',
+      error: (err && err.message) || 'Failed to send WhatsApp message',
     });
   }
 });
@@ -514,22 +521,21 @@ app.post('/whatsapp/send-or-queue', async (req, res) => {
 
   // If ready, send immediately
   if (waStatus === 'ready') {
-    let cleanPhone = phone.replace(/[^\d+]/g, '');
-    if (!cleanPhone.startsWith('+')) cleanPhone = '+' + cleanPhone;
-    const chatId = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
+    const chatId = formatPhoneForWA(phone);
 
     try {
       const sent = await waClient.sendMessage(chatId, message);
-      console.log(`[WhatsApp] Message sent to ${cleanPhone} (ID: ${sent.id.id})`);
+      const messageId = sent && sent.id ? sent.id.id : 'unknown';
+      console.log(`[WhatsApp] Message sent to ${chatId} (ID: ${messageId})`);
       return res.json({
         success: true,
         message: `WhatsApp message sent to ${phone}`,
-        messageId: sent.id.id,
+        messageId,
         background: true,
         sent: true,
       });
     } catch (err) {
-      return res.status(500).json({ success: false, error: err.message || 'Failed to send' });
+      return res.status(500).json({ success: false, error: (err && err.message) || 'Failed to send' });
     }
   }
 
@@ -664,23 +670,19 @@ app._handleWhatsAppSend = async (req, res) => {
     });
   }
 
-  let cleanPhone = phone.replace(/[^\d+]/g, '');
-  if (!cleanPhone.startsWith('+')) {
-    cleanPhone = '+' + cleanPhone;
-  }
-  const chatId = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
+  const chatId = formatPhoneForWA(phone);
 
   console.log(`[WhatsApp] Sending message to ${chatId} in background...`);
 
   try {
-    // Send directly — isRegisteredUser is unreliable and can crash
     const sent = await waClient.sendMessage(chatId, message || '');
-    console.log(`[WhatsApp] Message sent successfully (ID: ${sent.id.id})`);
+    const messageId = sent && sent.id ? sent.id.id : 'unknown';
+    console.log(`[WhatsApp] Message sent successfully (ID: ${messageId})`);
 
     return res.json({
       success: true,
       message: `WhatsApp message sent to ${phone}`,
-      messageId: sent.id.id,
+      messageId,
       background: true,
     });
   } catch (err) {

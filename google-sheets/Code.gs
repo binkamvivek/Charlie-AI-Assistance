@@ -62,6 +62,53 @@ function handleAction(action, params) {
     return createJsonResponse({ status: 'success', action: 'logged' });
   }
 
+  // ============= WhatsApp Queue Actions =============
+  
+  if (action === 'queue_message') {
+    const sheet = ss.getSheetByName('WhatsApp_Queue');
+    const phone = params.phone || '';
+    const message = params.message || '';
+    if (phone && message) {
+      sheet.appendRow([new Date().toISOString(), phone, message, 'pending', new Date().toISOString()]);
+    }
+    return createJsonResponse({ status: 'success', action: 'queued' });
+  }
+
+  if (action === 'get_queued_messages') {
+    const sheet = ss.getSheetByName('WhatsApp_Queue');
+    const data = getSheetData(sheet);
+    // Return only pending messages
+    const pending = data.filter(row => (row.Status || '').toString().toLowerCase() === 'pending');
+    return createJsonResponse({ status: 'success', data: pending });
+  }
+
+  if (action === 'clear_queued_message') {
+    const sheet = ss.getSheetByName('WhatsApp_Queue');
+    const phone = params.phone || '';
+    const message = params.message || '';
+    if (sheet && phone) {
+      clearQueuedMessage(sheet, phone, message);
+    }
+    return createJsonResponse({ status: 'success', action: 'cleared' });
+  }
+
+  if (action === 'clear_all_queued') {
+    const sheet = ss.getSheetByName('WhatsApp_Queue');
+    if (sheet) {
+      clearAllQueued(sheet);
+    }
+    return createJsonResponse({ status: 'success', action: 'all_cleared' });
+  }
+
+  if (action === 'mark_message_sent') {
+    const sheet = ss.getSheetByName('WhatsApp_Queue');
+    const phone = params.phone || '';
+    if (sheet && phone) {
+      markMessageSent(sheet, phone);
+    }
+    return createJsonResponse({ status: 'success', action: 'marked_sent' });
+  }
+
   return createJsonResponse({ status: 'error', message: 'Unknown action: ' + action });
 }
 
@@ -69,7 +116,8 @@ function initSheets(ss) {
   const tabs = [
     { name: 'Identity_Facts', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
     { name: 'Interests_Log', headers: ['Timestamp', 'Topic', 'Source', 'URL'] },
-    { name: 'Task_Routines', headers: ['Key', 'Value', 'Details', 'Updated_At'] }
+    { name: 'Task_Routines', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
+    { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status', 'Queued_At'] }
   ];
 
   tabs.forEach(tab => {
@@ -127,6 +175,40 @@ function deleteFact(sheet, key) {
     if (values[i][0] && values[i][0].toString().toLowerCase() === key.toString().toLowerCase()) {
       sheet.deleteRow(i + 1);
       break;
+    }
+  }
+}
+
+function clearQueuedMessage(sheet, phone, message) {
+  const values = sheet.getDataRange().getValues();
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (values[i][1] && values[i][1].toString() === phone.toString() &&
+        values[i][2] && values[i][2].toString() === message.toString() &&
+        values[i][3] && values[i][3].toString().toLowerCase() === 'pending') {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+}
+
+function clearAllQueued(sheet) {
+  const values = sheet.getDataRange().getValues();
+  // Delete from bottom to top to avoid index shifting
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (values[i][3] && values[i][3].toString().toLowerCase() === 'pending') {
+      sheet.deleteRow(i + 1);
+    }
+  }
+}
+
+function markMessageSent(sheet, phone) {
+  const values = sheet.getDataRange().getValues();
+  const now = new Date().toISOString();
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][1] && values[i][1].toString() === phone.toString() &&
+        values[i][3] && values[i][3].toString().toLowerCase() === 'pending') {
+      sheet.getRange(i + 1, 4).setValue('sent');
+      sheet.getRange(i + 1, 5).setValue(now);
     }
   }
 }

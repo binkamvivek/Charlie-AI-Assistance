@@ -977,14 +977,63 @@ const INTENT_CATEGORIES = [
                 if (waMessage === '') waMessage = null;
             }
 
-            // ---- WhatsApp: try Desktop Bridge first, fall back to wa.me browser link ----
+            // ---- WhatsApp: send-or-queue flow ----
             if (waPhone && waMessage) {
                 // Check if bridge is available
                 const bridgeCheck = await BridgeService.checkBridgeAvailable();
                 if (bridgeCheck.available) {
-                    if (onStatusChange) onStatusChange(`Sending WhatsApp message to ${waPhone}...`);
-                    const res = await BridgeService.sendWhatsApp(waPhone, waMessage);
-                    if (res.success) {
+                    if (onStatusChange) onStatusChange(`Processing WhatsApp message to ${waPhone}...`);
+                    const res = await BridgeService.sendWhatsAppOrQueue(waPhone, waMessage);
+
+                    // Sent immediately (WhatsApp was already authenticated)
+                    if (res.sent) {
+                        return {
+                            text: `WhatsApp message sent to ${waPhone} silently.`,
+                            toolExecuted: true,
+                            toolLogs: [`Sent WhatsApp to ${waPhone}: ${waMessage}`],
+                        };
+                    }
+
+                    // Queued — WhatsApp not authenticated, show QR and poll
+                    if (res.queued) {
+                        if (onStatusChange) onStatusChange(`WhatsApp not logged in. Opening QR code...`);
+
+                        // Open QR page in new tab
+                        const bridgeUrl = BridgeService.getBridgeUrl();
+                        const qrUrl = `${bridgeUrl}/qr`;
+                        if (typeof window !== 'undefined') {
+                            window.open(qrUrl, '_blank', 'width=600,height=800');
+                        }
+
+                        // Start polling for WhatsApp to become ready
+                        // The bridge will auto-send the queued message when ready
+                        BridgeService.pollWhatsAppUntilReady(
+                            300,  // 300 attempts × 2s = 10 minutes max wait
+                            2000, // 2-second intervals
+                            (result) => {
+                                if (result.status === 'ready') {
+                                    if (onStatusChange) onStatusChange('WhatsApp connected! Message sent.');
+                                } else if (result.status === 'timeout') {
+                                    if (onStatusChange) onStatusChange('WhatsApp login timed out. Say "send message" again.');
+                                }
+                            },
+                            (pollData) => {
+                                if (pollData.ready) {
+                                    if (onStatusChange) onStatusChange('WhatsApp connected! Delivering message...');
+                                }
+                            }
+                        );
+
+                        return {
+                            text: `WhatsApp is not logged in. I've opened the QR code in a new tab. Please scan it with your phone to link WhatsApp. Once connected, your message will be sent automatically to ${waPhone}.`,
+                            toolExecuted: true,
+                            toolLogs: [`Queued WhatsApp to ${waPhone}: ${waMessage}. QR tab opened.`],
+                        };
+                    }
+
+                    // Fallback: if send-or-queue failed unexpectedly, try wa.me
+                    const bridgeSendRes = await BridgeService.sendWhatsApp(waPhone, waMessage);
+                    if (bridgeSendRes.success) {
                         return {
                             text: `WhatsApp message sent to ${waPhone} silently.`,
                             toolExecuted: true,
@@ -993,7 +1042,7 @@ const INTENT_CATEGORIES = [
                     }
                 }
 
-                // Fallback: wa.me link in new tab (works everywhere — Vercel, local, etc.)
+                // Final fallback: wa.me link in new tab
                 openWaMe(waPhone, waMessage);
                 return {
                     text: `Opening WhatsApp Web in a new tab with message pre-filled for ${waPhone}.`,

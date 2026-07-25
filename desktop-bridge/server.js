@@ -14,6 +14,110 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================================================
+// In-Memory WhatsApp Message Queue
+// Persisted across disconnects; auto-sent when client becomes ready.
+// Also backed up to Google Sheets for crash recovery.
+// ============================================================================
+const messageQueue = []; // Array of { phone, message, timestamp }
+
+// ============================================================================
+// Sheets Web App URL (for queue persistence backup)
+// ============================================================================
+const SHEETS_WEB_APP_URL = process.env.CHARLIE_SHEETS_URL || '';
+
+// ============================================================================
+// Queue Management Helpers
+// ============================================================================
+
+/**
+ * Backup a queued message to Google Sheets (async, best-effort).
+ */
+async function backupQueueToSheets(phone, message) {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({
+      action: 'queue_message',
+      phone,
+      message,
+      _t: Date.now()
+    });
+    await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+  } catch (e) {
+    console.log('  [Queue] Sheets backup failed:', e.message);
+  }
+}
+
+/**
+ * Remove a queued message from Google Sheets backup (async, best-effort).
+ */
+async function removeFromSheetsBackup(phone, message) {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({
+      action: 'clear_queued_message',
+      phone,
+      message,
+      _t: Date.now()
+    });
+    await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+  } catch (e) {
+    console.log('  [Queue] Sheets removal failed:', e.message);
+  }
+}
+
+/**
+ * Add a message to the queue. Returns the queue length.
+ */
+function addToQueue(phone, message) {
+  const entry = { phone, message, timestamp: new Date().toISOString() };
+  messageQueue.push(entry);
+  console.log(`[Queue] Message queued for ${phone}. Queue length: ${messageQueue.length}`);
+
+  // Backup to Google Sheets (async)
+  backupQueueToSheets(phone, message);
+
+  return messageQueue.length;
+}
+
+/**
+ * Send all queued messages via the WhatsApp client.
+ * Returns { sent: number, failed: { phone, message, error }[] }
+ */
+async function flushQueue() {
+  if (messageQueue.length === 0) return { sent: 0, failed: [] };
+  if (!waClient || waStatus !== 'ready') {
+    console.log(`[Queue] Cannot flush — client not ready (status: ${waStatus})`);
+    return { sent: 0, failed: messageQueue.map(e => ({ phone: e.phone, message: e.message, error: 'Client not ready' })) };
+  }
+
+  console.log(`[Queue] Flushing ${messageQueue.length} queued message(s)...`);
+  const sent = [];
+  const failed = [];
+
+  while (messageQueue.length > 0) {
+    const entry = messageQueue.shift();
+    try {
+      let cleanPhone = entry.phone.replace(/[^\d+]/g, '');
+      if (!cleanPhone.startsWith('+')) cleanPhone = '+' + cleanPhone;
+      const chatId = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
+
+      const result = await waClient.sendMessage(chatId, entry.message);
+      console.log(`[Queue] Sent to ${cleanPhone} (ID: ${result.id.id})`);
+      sent.push(entry.phone);
+
+      // Remove from sheets backup
+      await removeFromSheetsBackup(entry.phone, entry.message);
+    } catch (err) {
+      console.error(`[Queue] Failed to send to ${entry.phone}:`, err.message);
+      failed.push({ phone: entry.phone, message: entry.message, error: err.message });
+    }
+  }
+
+  console.log(`[Queue] Flush complete. Sent: ${sent.length}, Failed: ${failed.length}`);
+  return { sent: sent.length, failed };
+}
+
+// ============================================================================
 // WhatsApp Background Client — uses whatsapp-web.js with session persistence
 // ============================================================================
 let waClient = null;
@@ -86,6 +190,16 @@ function initWhatsAppClient() {
     waStatus = 'ready';
     waError = null;
     console.log('✅ [WhatsApp] Background client is ready! Messages will be sent silently.');
+
+    // Auto-send any queued messages
+    flushQueue().then(result => {
+      if (result.sent > 0) {
+        console.log(`✅ [Queue] Auto-sent ${result.sent} queued message(s) after login.`);
+      }
+      if (result.failed.length > 0) {
+        console.warn(`⚠️ [Queue] ${result.failed.length} queued message(s) failed.`);
+      }
+    });
   });
 
   waClient.on('authenticated', () => {
@@ -224,7 +338,6 @@ app.get('/whatsapp/qr', async (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WhatsApp QR - Charlie AI</title>
-  <meta http-equiv="refresh" content="3">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -257,20 +370,49 @@ app.get('/whatsapp/qr', async (req, res) => {
     .steps li { margin-bottom: 4px; color: #cbd5e1; }
     .steps strong { color: #38bdf8; }
   </style>
+  <script>
+    // Poll bridge for WhatsApp status; auto-close & redirect when ready
+    let pollCount = 0;
+    const pollInterval = setInterval(async () => {
+      try {
+        const resp = await fetch('/whatsapp/status');
+        const data = await resp.json();
+        pollCount++;
+        document.getElementById('status-text').textContent = data.ready ? '✅ Connected! Redirecting...' : '⏳ Waiting for scan...';
+        document.getElementById('status-badge').className = data.ready ? 'status connected' : 'status waiting';
+        if (data.ready) {
+          clearInterval(pollInterval);
+          document.getElementById('status-text').textContent = '✅ WhatsApp Connected! Sending your message...';
+          // Close this tab after 1.5 seconds
+          setTimeout(() => {
+            // Try to find the opener (dashboard) and redirect it to itself
+            if (window.opener && !window.opener.closed) {
+              window.opener.focus();
+            }
+            window.close();
+          }, 1500);
+        }
+      } catch(e) {
+        document.getElementById('status-text').textContent = '⚠️ Connection error...';
+      }
+    }, 2000);
+  </script>
 </head>
 <body>
   <div class="container">
     <h1>🔗 WhatsApp Authentication</h1>
     <p class="subtitle">Scan this QR code with WhatsApp on your phone</p>
     <div class="qr-container">${qrSvg}</div>
-    <div class="status waiting">⏳ Waiting for scan...</div>
+    <div id="status-badge" class="status waiting">
+      <span id="status-text">⏳ Waiting for scan...</span>
+    </div>
     <div class="steps">
       <strong>Steps:</strong>
       <ol>
         <li>Open <strong>WhatsApp</strong> on your phone</li>
         <li>Tap <strong>Menu</strong> (⋮) → <strong>Linked Devices</strong> → <strong>Link a Device</strong></li>
         <li>Scan the QR code above</li>
-        <li>Once connected, refresh this page — it will show ✅ Connected</li>
+        <li>This page will auto-close once connected! ✅</li>
       </ol>
     </div>
 </body>
@@ -355,6 +497,79 @@ app.post('/whatsapp/send', async (req, res) => {
       error: err.message || 'Failed to send WhatsApp message',
     });
   }
+});
+
+// ============================================================================
+// WhatsApp Send-Or-Queue — tries to send; queues if not authenticated
+// ============================================================================
+app.post('/whatsapp/send-or-queue', async (req, res) => {
+  const { phone, message } = req.body;
+
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'Phone number is required' });
+  }
+  if (!message) {
+    return res.status(400).json({ success: false, error: 'Message is required' });
+  }
+
+  // If ready, send immediately
+  if (waStatus === 'ready') {
+    let cleanPhone = phone.replace(/[^\d+]/g, '');
+    if (!cleanPhone.startsWith('+')) cleanPhone = '+' + cleanPhone;
+    const chatId = cleanPhone.replace(/[^0-9+]/g, '') + '@c.us';
+
+    try {
+      const sent = await waClient.sendMessage(chatId, message);
+      console.log(`[WhatsApp] Message sent to ${cleanPhone} (ID: ${sent.id.id})`);
+      return res.json({
+        success: true,
+        message: `WhatsApp message sent to ${phone}`,
+        messageId: sent.id.id,
+        background: true,
+        sent: true,
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message || 'Failed to send' });
+    }
+  }
+
+  // Not ready — queue the message
+  addToQueue(phone, message);
+
+  return res.json({
+    success: true,
+    queued: true,
+    message: `Message queued for ${phone}. WhatsApp needs to be authenticated first.`,
+    waStatus,
+    queueLength: messageQueue.length,
+  });
+});
+
+// ============================================================================
+// Get current queue status
+// ============================================================================
+app.get('/whatsapp/queue', (req, res) => {
+  res.json({
+    queueLength: messageQueue.length,
+    messages: messageQueue.map(e => ({ phone: e.phone, message: e.message, timestamp: e.timestamp })),
+  });
+});
+
+// ============================================================================
+// Check and send queued messages (called by frontend after polling detects ready)
+// ============================================================================
+app.post('/whatsapp/queue/flush', async (req, res) => {
+  if (waStatus !== 'ready') {
+    return res.json({ flushed: false, sent: 0, failed: [], waStatus, message: 'Client not ready yet' });
+  }
+
+  const result = await flushQueue();
+  return res.json({
+    flushed: result.sent > 0 || result.failed.length > 0,
+    sent: result.sent,
+    failed: result.failed,
+    waStatus,
+  });
 });
 
 // Main execute endpoint (existing functionality)

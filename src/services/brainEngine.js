@@ -998,11 +998,23 @@ const INTENT_CATEGORIES = [
                     if (res.queued) {
                         if (onStatusChange) onStatusChange(`WhatsApp not logged in. Opening QR code...`);
 
-                        // Open QR page in new tab
+                        // Open QR page in new tab (try multiple approaches for popup blocker resilience)
                         const bridgeUrl = BridgeService.getBridgeUrl();
                         const qrUrl = `${bridgeUrl}/qr`;
                         if (typeof window !== 'undefined') {
-                            window.open(qrUrl, '_blank', 'width=600,height=800');
+                            // Approach 1: Direct open (may be blocked by popup blocker)
+                            const newWin = window.open(qrUrl, '_blank', 'width=600,height=800');
+                            // Approach 2: If blocked, try creating an anchor and clicking it
+                            if (!newWin || newWin.closed || typeof newWin.closed === 'undefined') {
+                                const a = document.createElement('a');
+                                a.href = qrUrl;
+                                a.target = '_blank';
+                                a.rel = 'noopener noreferrer';
+                                a.style.display = 'none';
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                            }
                         }
 
                         // Start polling for WhatsApp to become ready
@@ -1025,9 +1037,15 @@ const INTENT_CATEGORIES = [
                         );
 
                         return {
-                            text: `WhatsApp is not logged in. I've opened the QR code in a new tab. Please scan it with your phone to link WhatsApp. Once connected, your message will be sent automatically to ${waPhone}.`,
+                            text: `WhatsApp is not logged in. Please click this link to scan the QR code: ${qrUrl} — Once you scan with your phone, your message will be sent automatically to ${waPhone}.`,
+                            cardPayload: {
+                                title: 'Scan WhatsApp QR Code',
+                                googleUrl: qrUrl,
+                                youtubeUrl: qrUrl,
+                                query: 'Open WhatsApp QR page'
+                            },
                             toolExecuted: true,
-                            toolLogs: [`Queued WhatsApp to ${waPhone}: ${waMessage}. QR tab opened.`],
+                            toolLogs: [`Queued WhatsApp to ${waPhone}: ${waMessage}. QR link provided.`],
                         };
                     }
 

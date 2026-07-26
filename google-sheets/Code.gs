@@ -196,10 +196,107 @@ function handleAction(action, params) {
     const phone = (params.phone || params.incoming_phone || '').trim();
     const incoming = (params.incoming_message || '').trim();
     const reply = (params.reply_message || '').trim();
+    const sessionId = (params.session_id || '').trim();
+    const step = (params.step || '').trim();
+    const state = (params.state || '').trim();
     if (phone) {
-      sheet.appendRow([new Date().toISOString(), phone, incoming, reply]);
+      sheet.appendRow([new Date().toISOString(), sessionId, step, phone, incoming, reply, state]);
     }
     return createJsonResponse({ status: 'success', action: 'logged' });
+  }
+
+  // ===========================================================================
+  // AWAY CONVERSATIONS — structured per-session records
+  // ===========================================================================
+  if (action === 'save_away_conversation') {
+    const sheet = ss.getSheetByName('Away_Conversations');
+    const sessionId = (params.session_id || '').trim();
+    const phone = (params.phone || '').trim();
+    const chatId = (params.chat_id || '').trim();
+    const status = (params.status || 'in_progress').trim();
+    const collectedData = params.collected_data || '{}';
+
+    if (!sessionId || !phone) {
+      return createJsonResponse({ status: 'error', message: 'session_id and phone are required' });
+    }
+
+    const now = new Date().toISOString();
+    const values = sheet.getDataRange().getValues();
+    let foundRow = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][0] && values[i][0].toString() === sessionId) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+
+    if (foundRow > 0) {
+      sheet.getRange(foundRow, 4).setValue(now);
+      sheet.getRange(foundRow, 5).setValue(status);
+      sheet.getRange(foundRow, 6).setValue(collectedData);
+      sheet.getRange(foundRow, 7).setValue(now);
+    } else {
+      sheet.appendRow([sessionId, phone, chatId, now, '', status, collectedData, now]);
+    }
+
+    return createJsonResponse({ status: 'success', action: 'saved', session_id: sessionId });
+  }
+
+  if (action === 'update_away_conversation') {
+    const sheet = ss.getSheetByName('Away_Conversations');
+    const sessionId = (params.session_id || '').trim();
+    if (!sessionId) {
+      return createJsonResponse({ status: 'error', message: 'session_id is required' });
+    }
+
+    const now = new Date().toISOString();
+    const values = sheet.getDataRange().getValues();
+    let foundRow = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][0] && values[i][0].toString() === sessionId) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    if (foundRow === -1) {
+      return createJsonResponse({ status: 'error', message: 'Session not found' });
+    }
+
+    if (params.status) {
+      sheet.getRange(foundRow, 5).setValue(params.status);
+      if (params.status === 'complete' || params.status === 'timed_out') {
+        sheet.getRange(foundRow, 4).setValue(now);
+      }
+    }
+    if (params.collected_data) {
+      sheet.getRange(foundRow, 6).setValue(params.collected_data);
+    }
+    sheet.getRange(foundRow, 7).setValue(now);
+
+    return createJsonResponse({ status: 'success', action: 'updated', session_id: sessionId });
+  }
+
+  if (action === 'get_away_conversations') {
+    const sheet = ss.getSheetByName('Away_Conversations');
+    const data = getSheetData(sheet);
+    const phone = (params.phone || '').trim().toLowerCase();
+    const filterStatus = (params.status || '').trim().toLowerCase();
+
+    let filtered = data;
+    if (phone) {
+      filtered = filtered.filter(r => (r.Phone || '').toString().toLowerCase() === phone);
+    }
+    if (filterStatus) {
+      filtered = filtered.filter(r => (r.Status || '').toString().toLowerCase() === filterStatus);
+    }
+    // Sort by started_at descending (newest first)
+    filtered.sort((a, b) => {
+      const da = new Date(a.Started_At || 0);
+      const db = new Date(b.Started_At || 0);
+      return db - da;
+    });
+
+    return createJsonResponse({ status: 'success', data: filtered });
   }
 
   return createJsonResponse({ status: 'error', message: 'Unknown action: ' + action });
@@ -213,7 +310,8 @@ function initSheets(ss) {
     { name: 'Contacts', headers: ['Nickname', 'Phone', 'Created_At'] },
     { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status'] },
     { name: 'AwayMode', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
-    { name: 'Away_Log', headers: ['Timestamp', 'Phone', 'Incoming', 'Reply'] }
+    { name: 'Away_Log', headers: ['Timestamp', 'Session_ID', 'Step', 'Phone', 'Incoming', 'Reply', 'State'] },
+    { name: 'Away_Conversations', headers: ['Session_ID', 'Phone', 'Chat_ID', 'Started_At', 'Completed_At', 'Status', 'Collected_Data', 'Updated_At'] }
   ];
 
   tabs.forEach(tab => {

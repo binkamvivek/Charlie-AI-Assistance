@@ -7,7 +7,7 @@ import path from 'path';
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 
-// Away mode auto-reply engine (static reply now, full engine later)
+// Away mode auto-reply engine (intelligent conversation engine)
 import * as awayBrain from './awayBrain.js';
 
 const app = express();
@@ -46,6 +46,11 @@ let awayState = {
 // Sheets Web App URL (for queue persistence backup)
 // ============================================================================
 const SHEETS_WEB_APP_URL = process.env.CHARLIE_SHEETS_URL || '';
+
+// Pass sheets URL to awayBrain for conversation persistence
+if (SHEETS_WEB_APP_URL) {
+  awayBrain.setSheetsUrl(SHEETS_WEB_APP_URL);
+}
 
 // ============================================================================
 // Queue Management Helpers
@@ -125,16 +130,21 @@ async function loadQueueFromSheets() {
 // ============================================================================
 
 /**
- * Log an away-mode conversation to Google Sheets (async, best-effort).
+ * Log an away-mode conversation step to Google Sheets (async, best-effort).
+ * Now delegates to awayBrain's internal logging which handles structured data.
+ * This function is kept for backward compatibility / manual logging use.
  */
-async function logAwayConversation(phone, incomingMessage, replyMessage) {
+async function logAwayConversation(phone, incomingMessage, replyMessage, sessionId = '', step = '', state = '') {
   if (!SHEETS_WEB_APP_URL) return;
   try {
     const params = new URLSearchParams({
       action: 'log_away_conversation',
       phone,
-      incoming_message: incomingMessage,
-      reply_message: replyMessage,
+      session_id: sessionId,
+      step,
+      state,
+      incoming_message: (incomingMessage || '').slice(0, 500),
+      reply_message: (replyMessage || '').slice(0, 500),
       _t: Date.now()
     });
     await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
@@ -354,7 +364,7 @@ function initWhatsAppClient() {
   });
 
   // ===========================================================================
-  // Incoming Message Listener — Away Mode Auto-Reply
+  // Incoming Message Listener — Intelligent Away Conversation
   // ===========================================================================
   waClient.on('message', async (msg) => {
     // Ignore status broadcasts, our own messages, and group chats
@@ -364,39 +374,76 @@ function initWhatsAppClient() {
     if (!awayState.active) return;
 
     const senderRaw = msg.from;
+    const phone = senderRaw.split('@')[0] || '';
 
-    console.log(`[Away] 📩 Incoming from=${senderRaw} body="${msg.body.slice(0, 80)}"`);
-
-    // Check if sender's chat ID is in the pre-resolved target list (handles @lid + @c.us)
+    // Check if sender's chat ID is in the pre-resolved target list
     if (awayState.resolvedIds.length > 0) {
       const matched = awayState.resolvedIds.includes(senderRaw);
       console.log(`[Away] ID match check: resolvedIds=[${awayState.resolvedIds.join(',')}] includes ${senderRaw}? ${matched}`);
       if (!matched) return;
     }
 
-    // Try brain engine first; fall back to static message
-    let reply = awayState.customMessage;
+    // Determine message type for media handling
+    const isMedia = msg.type && msg.type !== 'chat';
+    const caption = msg.body || '';
+
+    console.log(`[Away] 📩 ${isMedia ? `[${msg.type}]` : '[text]'} from=${senderRaw} body="${caption.slice(0, 80)}"`);
+
+    let brainResult = null;
+
     try {
-      const brainResult = awayBrain.processInput(msg.body, {});
-      if (brainResult && brainResult.text) {
-        reply = brainResult.text;
+      if (isMedia) {
+        // Handle media messages (images, videos, GIFs, documents, stickers, voice notes)
+        brainResult = awayBrain.handleMediaInput(
+          msg.type,
+          caption,
+          senderRaw,
+          { phone }
+        );
+      } else {
+        // Handle text messages — pass to intelligent conversation engine
+        brainResult = awayBrain.processInput(
+          caption,
+          senderRaw,
+          { phone }
+        );
       }
-    } catch (_) {
-      // If brain engine fails, use the static message
+    } catch (err) {
+      console.error(`[Away] Brain engine error:`, err.message);
     }
 
-    console.log(`[Away] Auto-replying to ${senderRaw} with "${reply.slice(0, 60)}..."`);
+    // Determine reply: use brain result, or fall back to static message
+    let reply = awayState.customMessage;
+    if (brainResult && brainResult.text) {
+      reply = brainResult.text;
+    }
+
+    console.log(`[Away] Replying to ${senderRaw} with "${reply.slice(0, 80)}..."`);
 
     try {
       await waClient.sendMessage(senderRaw, reply);
       console.log(`[Away] ✅ Reply sent to ${senderRaw}`);
-
-      // Log conversation for record-keeping
-      logAwayConversation(senderRaw, msg.body, reply);
     } catch (err) {
       console.error(`[Away] ❌ Failed to reply to ${senderRaw}:`, err.message);
     }
   });
+
+  // Periodic timeout check — every 30 seconds, check for stalled away conversations
+  setInterval(() => {
+    if (!awayState.active) return;
+    try {
+      const timedOut = awayBrain.checkTimeouts();
+      for (const entry of timedOut) {
+        if (entry.reply && waClient && waStatus === 'ready') {
+          waClient.sendMessage(entry.senderId, entry.reply)
+            .then(() => console.log(`[Away] ⏰ Timeout notice sent to ${entry.senderId}`))
+            .catch(e => console.error(`[Away] Failed to send timeout notice: ${e.message}`));
+        }
+      }
+    } catch (e) {
+      // Silently handle
+    }
+  }, 30000);
 
   waClient.on('authenticated', () => {
     console.log('✅ [WhatsApp] Session authenticated and saved.');
@@ -866,6 +913,31 @@ app.post('/away/toggle', async (req, res) => {
     phoneNumbers: awayState.phoneNumbers,
     customMessage: awayState.customMessage,
   });
+});
+
+// GET /away/conversations — returns a list of active/past away conversations
+app.get('/away/conversations', (req, res) => {
+  try {
+    const allConversations = awayBrain.getAllConversations();
+    const count = awayBrain.getConversationCount();
+    res.json({
+      success: true,
+      count,
+      conversations: allConversations.map(s => ({
+        senderId: s.senderId,
+        phone: s.phone,
+        state: s.state,
+        stateLabel: s.stateLabel,
+        collectedData: s.collectedData,
+        stepCount: (s.conversationLog || []).length,
+        lastActivity: s.lastActivity,
+        startedAt: s.startedAt,
+        offTopicCount: s.offTopicCount,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // Main execute endpoint (existing functionality)

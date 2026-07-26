@@ -313,4 +313,77 @@ export class SheetsService {
 
     return contacts;
   }
+
+  // ============================================================================
+  // AWAY MODE STORAGE
+  // ============================================================================
+
+  static LOCAL_AWAY_KEY = 'charlie_away_mode_v1';
+
+  static getLocalAwayState() {
+    if (typeof window === 'undefined') return { active: false, phoneNumbers: [], customMessage: '' };
+    const stored = localStorage.getItem(SheetsService.LOCAL_AWAY_KEY);
+    if (!stored) return { active: false, phoneNumbers: [], customMessage: '' };
+    try {
+      return JSON.parse(stored);
+    } catch (_) {
+      return { active: false, phoneNumbers: [], customMessage: '' };
+    }
+  }
+
+  static saveLocalAwayState(state) {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(SheetsService.LOCAL_AWAY_KEY, JSON.stringify(state));
+    }
+  }
+
+  /**
+   * Sync away mode state to Google Sheets.
+   */
+  static async syncAwayStateToSheets(active, phoneNumbers, customMessage) {
+    const webAppUrl = SheetsService.getWebAppUrl();
+    if (!webAppUrl) return;
+    try {
+      const params = new URLSearchParams({
+        action: 'save_fact',
+        category: 'AwayMode',
+        key: 'away_active',
+        value: active ? 'true' : 'false',
+        details: JSON.stringify({ phoneNumbers, customMessage }),
+        _t: Date.now()
+      });
+      await fetch(`${webAppUrl}?${params.toString()}`);
+      console.log('[SheetsService] Away state synced to Sheets');
+    } catch (err) {
+      console.warn('[SheetsService] Away state sync failed:', err);
+    }
+  }
+
+  /**
+   * Load away mode state from Google Sheets.
+   */
+  static async loadAwayStateFromSheets() {
+    const webAppUrl = SheetsService.getWebAppUrl();
+    if (!webAppUrl) return SheetsService.getLocalAwayState();
+    try {
+      const params = new URLSearchParams({ action: 'get_away_state', _t: Date.now() });
+      const response = await fetch(`${webAppUrl}?${params.toString()}`);
+      const data = await response.json();
+      if (data.status === 'success' && data.data) {
+        const active = data.data.active === 'true';
+        let details = {};
+        try { details = JSON.parse(data.data.details || '{}'); } catch (_) {}
+        const state = {
+          active,
+          phoneNumbers: Array.isArray(details.phoneNumbers) ? details.phoneNumbers : [],
+          customMessage: details.customMessage || '',
+        };
+        SheetsService.saveLocalAwayState(state);
+        return state;
+      }
+    } catch (err) {
+      console.warn('[SheetsService] Load away state from Sheets failed:', err);
+    }
+    return SheetsService.getLocalAwayState();
+  }
 }

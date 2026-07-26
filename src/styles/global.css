@@ -120,6 +120,62 @@ body {
   animation: orbRotate 1.5s linear infinite;
 }
 
+/* Away Mode Toggle Orb (smaller, next to voice orb) */
+.away-orb {
+  width: 70px !important;
+  height: 70px !important;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.3), inset 0 0 10px rgba(255, 255, 255, 0.3) !important;
+}
+
+.away-orb::before {
+  top: -5px !important;
+  left: -5px !important;
+  right: -5px !important;
+  bottom: -5px !important;
+  filter: blur(8px) !important;
+}
+
+.away-orb.away-on {
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.9) 0%, rgba(245, 158, 11, 0.8) 50%, rgba(239, 68, 68, 0.6) 100%) !important;
+  box-shadow: 0 0 30px rgba(251, 191, 36, 0.6), inset 0 0 15px rgba(255, 255, 255, 0.5) !important;
+  animation: pulseAway 2s infinite ease-in-out;
+}
+
+.away-orb.away-on::before {
+  background: linear-gradient(45deg, #f59e0b, #ef4444, #fbbf24) !important;
+}
+
+.away-orb.away-off {
+  background: radial-gradient(circle, rgba(52, 211, 153, 0.7) 0%, rgba(16, 185, 129, 0.5) 50%, rgba(6, 95, 70, 0.4) 100%) !important;
+  box-shadow: 0 0 15px rgba(52, 211, 153, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.2) !important;
+  opacity: 0.7;
+}
+
+.away-orb.away-off::before {
+  background: linear-gradient(45deg, #34d399, #10b981, #065f46) !important;
+  opacity: 0.3 !important;
+}
+
+@keyframes pulseAway {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* Away config panel colors */
+.hover-bg-slate-800:hover { background-color: #1e293b; }
+.hover-bg-amber-500:hover { background-color: #d97706; }
+.hover-border-amber-400:hover { border-color: #fbbf24; }
+
+.border-amber-800-40 { border-color: rgba(146, 64, 14, 0.4); }
+.bg-amber-600 { background-color: #d97706; }
+.text-amber-400 { color: #fbbf24; }
+
+.resize-none { resize: none; }
+.block { display: block; }
+.self-end { align-self: flex-end; }
+.max-w-md { max-width: 28rem; }
+
 /* Utility Helpers */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }
@@ -137,7 +193,9 @@ body {
 .gap-6 { gap: 1.5rem; }
 
 .w-full { width: 100%; }
+.w-3-5 { width: 0.875rem; }
 .h-full { height: 100%; }
+.h-3-5 { height: 0.875rem; }
 .min-h-screen { min-height: 100vh; }
 .max-w-1600 { max-width: 1600px; }
 .max-w-lg { max-width: 32rem; }

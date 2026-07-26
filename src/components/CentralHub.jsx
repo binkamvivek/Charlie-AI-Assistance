@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Send, Sparkles, Volume2, VolumeX, Activity, ExternalLink } from 'lucide-react';
+import { Mic, MicOff, Send, Sparkles, Volume2, VolumeX, Activity, ExternalLink, Moon, Sun, Settings } from 'lucide-react';
 
-export default function CentralHub({ onSendMessage, status, currentResponse, cardPayload, ttsEnabled, setTtsEnabled }) {
+export default function CentralHub({ onSendMessage, status, currentResponse, cardPayload, ttsEnabled, setTtsEnabled, awayMode, onToggleAway, onUpdateAwayConfig }) {
   const [inputText, setInputText] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [showAwayConfig, setShowAwayConfig] = useState(false);
+  const [awayPhoneInput, setAwayPhoneInput] = useState('');
+  const [awayMessageInput, setAwayMessageInput] = useState('');
   const canvasRef = useRef(null);
   const recognitionRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -119,6 +122,14 @@ export default function CentralHub({ onSendMessage, status, currentResponse, car
     }
   }, [currentResponse, ttsEnabled]);
 
+  // Sync away config inputs when away mode state changes
+  useEffect(() => {
+    if (awayMode.active) {
+      setAwayPhoneInput(awayMode.phoneNumbers.join(', '));
+      setAwayMessageInput(awayMode.customMessage || '');
+    }
+  }, [awayMode.active, awayMode.phoneNumbers, awayMode.customMessage]);
+
   const toggleListening = () => {
     if (!recognitionRef.current) {
       alert('Web Speech API is not supported in this browser. Please use Chrome or Edge.');
@@ -162,22 +173,102 @@ export default function CentralHub({ onSendMessage, status, currentResponse, car
         </button>
       </div>
 
-      {/* Glowing Floating Central Node */}
+      {/* Glowing Floating Central Node + Away Toggle */}
       <div className="my-6 flex flex-col items-center gap-4">
-        <div
-          onClick={toggleListening}
-          className={`glow-orb ${isListening ? 'listening' : status.includes('Executing') ? 'thinking' : ''}`}
-          title={isListening ? 'Click to stop listening' : 'Click to speak to Charlie'}
-        >
-          {isListening ? (
-            <MicOff className="w-10 h-10 text-white" />
-          ) : (
-            <Mic className="w-10 h-10 text-white" />
-          )}
+        <div className="flex items-center gap-6">
+          {/* Voice Button */}
+          <div
+            onClick={toggleListening}
+            className={`glow-orb ${isListening ? 'listening' : status.includes('Executing') ? 'thinking' : ''}`}
+            title={isListening ? 'Click to stop listening' : 'Click to speak to Charlie'}
+          >
+            {isListening ? (
+              <MicOff className="w-10 h-10 text-white" />
+            ) : (
+              <Mic className="w-10 h-10 text-white" />
+            )}
+          </div>
+
+          {/* Away/Back Toggle Button */}
+          <div className="flex flex-col items-center gap-1">
+            <div
+              onClick={onToggleAway}
+              className={`glow-orb away-orb ${awayMode.active ? 'away-on' : 'away-off'}`}
+              title={awayMode.active ? 'Click to come back (disable auto-reply)' : 'Click to go away (enable auto-reply)'}
+            >
+              {awayMode.active ? (
+                <Moon className="w-7 h-7 text-white" />
+              ) : (
+                <Sun className="w-7 h-7 text-white" />
+              )}
+            </div>
+            <span className={`text-xs font-bold font-mono tracking-wider ${awayMode.active ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {awayMode.active ? 'AWAY' : 'BACK'}
+            </span>
+          </div>
         </div>
+
         <p className="text-xs font-mono text-slate-400">
-          {isListening ? 'Listening... Speak now' : 'Click glowing node or type below'}
+          {awayMode.active
+            ? 'Away mode ON — Charlie is handling conversations'
+            : isListening
+              ? 'Listening... Speak now'
+              : 'Click glowing node or type below'}
         </p>
+
+        {/* Away Mode Config Panel */}
+        {awayMode.active && (
+          <div className="w-full max-w-md p-3 rounded-xl bg-slate-950-90 border border-amber-800-40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-mono text-amber-400 font-semibold tracking-wide">AUTO-REPLY ACTIVE</span>
+              <button
+                onClick={() => setShowAwayConfig(!showAwayConfig)}
+                className="p-1 rounded-md hover-bg-slate-800 transition-colors"
+                title="Configure away settings"
+              >
+                <Settings className="w-3-5 h-3-5 text-slate-400" />
+              </button>
+            </div>
+            {showAwayConfig && (
+              <div className="flex flex-col gap-2">
+                <div>
+                  <label className="text-xs text-slate-500 font-mono mb-1 block">Phone Numbers (comma separated, with country code)</label>
+                  <input
+                    type="text"
+                    value={awayPhoneInput}
+                    onChange={(e) => setAwayPhoneInput(e.target.value)}
+                    placeholder="+919876543210, +911234567890"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 font-mono mb-1 block">Auto-Reply Message</label>
+                  <textarea
+                    value={awayMessageInput}
+                    onChange={(e) => setAwayMessageInput(e.target.value)}
+                    rows={3}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 font-mono resize-none"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    const nums = awayPhoneInput.split(',').map(n => n.trim()).filter(Boolean);
+                    onUpdateAwayConfig(nums, awayMessageInput);
+                    setShowAwayConfig(false);
+                  }}
+                  className="self-end px-4 py-1-5 rounded-lg bg-amber-600 text-white text-xs font-bold hover-bg-amber-500 transition-colors"
+                >
+                  Save & Apply
+                </button>
+              </div>
+            )}
+            {!showAwayConfig && awayMode.phoneNumbers.length > 0 && (
+              <p className="text-xs text-slate-500 font-mono">
+                Replying to {awayMode.phoneNumbers.length} number(s)
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Live Audio Waveform Canvas */}
         <canvas ref={canvasRef} width={280} height={40} className="w-full rounded-lg" />

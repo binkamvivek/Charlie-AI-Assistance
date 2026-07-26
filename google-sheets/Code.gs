@@ -178,6 +178,30 @@ function handleAction(action, params) {
     return createJsonResponse({ status: 'success', action: 'all_cleared' });
   }
 
+  // ===========================================================================
+  // AWAY MODE
+  // ===========================================================================
+  if (action === 'get_away_state') {
+    const sheet = ss.getSheetByName('AwayMode');
+    const data = getSheetData(sheet);
+    const activeRow = data.find(r => r.Key === 'away_active');
+    return createJsonResponse({
+      status: 'success',
+      data: activeRow || { Key: 'away_active', Value: 'false', Details: '{}', Updated_At: '' }
+    });
+  }
+
+  if (action === 'log_away_conversation') {
+    const sheet = ss.getSheetByName('Away_Log');
+    const phone = (params.phone || params.incoming_phone || '').trim();
+    const incoming = (params.incoming_message || '').trim();
+    const reply = (params.reply_message || '').trim();
+    if (phone) {
+      sheet.appendRow([new Date().toISOString(), phone, incoming, reply]);
+    }
+    return createJsonResponse({ status: 'success', action: 'logged' });
+  }
+
   return createJsonResponse({ status: 'error', message: 'Unknown action: ' + action });
 }
 
@@ -187,7 +211,9 @@ function initSheets(ss) {
     { name: 'Interests_Log', headers: ['Timestamp', 'Topic', 'Source', 'URL'] },
     { name: 'Task_Routines', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
     { name: 'Contacts', headers: ['Nickname', 'Phone', 'Created_At'] },
-    { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status'] }
+    { name: 'WhatsApp_Queue', headers: ['Timestamp', 'Phone', 'Message', 'Status'] },
+    { name: 'AwayMode', headers: ['Key', 'Value', 'Details', 'Updated_At'] },
+    { name: 'Away_Log', headers: ['Timestamp', 'Phone', 'Incoming', 'Reply'] }
   ];
 
   tabs.forEach(tab => {

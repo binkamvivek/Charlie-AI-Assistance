@@ -7,6 +7,9 @@ import path from 'path';
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 
+// Away mode auto-reply engine (static reply now, full engine later)
+import * as awayBrain from './awayBrain.js';
+
 const app = express();
 
 // Port: Railway assigns via PORT env; fallback 3001 for local dev
@@ -28,6 +31,15 @@ app.use(express.json({ limit: '50mb' }));
 // Also backed up to Google Sheets for crash recovery.
 // ============================================================================
 const messageQueue = []; // Array of { phone, message, timestamp }
+
+// ============================================================================
+// Away Mode State
+// ============================================================================
+let awayState = {
+  active: false,
+  phoneNumbers: [],
+  customMessage: 'Vivek is away at the moment, this is Charlie speaking. You can leave your message here, and Vivek will respond when he is back.',
+};
 
 // ============================================================================
 // Sheets Web App URL (for queue persistence backup)
@@ -104,6 +116,82 @@ async function loadQueueFromSheets() {
     }
   } catch (e) {
     console.log('  [Queue] Could not load from Sheets:', e.message);
+  }
+}
+
+// ============================================================================
+// Away Mode Helpers
+// ============================================================================
+
+/**
+ * Log an away-mode conversation to Google Sheets (async, best-effort).
+ */
+async function logAwayConversation(phone, incomingMessage, replyMessage) {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({
+      action: 'log_away_conversation',
+      phone,
+      incoming_message: incomingMessage,
+      reply_message: replyMessage,
+      _t: Date.now()
+    });
+    await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+  } catch (e) {
+    console.log('  [Away] Conversation log to Sheets failed:', e.message);
+  }
+}
+
+/**
+ * Sync away state to Google Sheets (async, best-effort).
+ */
+async function syncAwayStateToSheets() {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({
+      action: 'save_fact',
+      category: 'AwayMode',
+      key: 'away_active',
+      value: awayState.active ? 'true' : 'false',
+      details: JSON.stringify({
+        phoneNumbers: awayState.phoneNumbers,
+        customMessage: awayState.customMessage,
+      }),
+      _t: Date.now()
+    });
+    await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+    console.log(`[Away] State synced to Sheets (active: ${awayState.active})`);
+  } catch (e) {
+    console.log('  [Away] Sync to Sheets failed:', e.message);
+  }
+}
+
+/**
+ * Load away state from Google Sheets (for crash recovery).
+ */
+async function loadAwayStateFromSheets() {
+  if (!SHEETS_WEB_APP_URL) return;
+  try {
+    const params = new URLSearchParams({ action: 'get_away_state', _t: Date.now() });
+    const response = await fetch(`${SHEETS_WEB_APP_URL}?${params.toString()}`);
+    const data = await response.json();
+    if (data.status === 'success' && data.data) {
+      const active = data.data.active === 'true';
+      let details = {};
+      try {
+        details = JSON.parse(data.data.details || '{}');
+      } catch (_) { /* ignore parse errors */ }
+      awayState = {
+        active,
+        phoneNumbers: Array.isArray(details.phoneNumbers) ? details.phoneNumbers : [],
+        customMessage: details.customMessage || awayState.customMessage,
+      };
+      if (active) {
+        console.log(`[Away] Restored away mode: ACTIVE (${awayState.phoneNumbers.length} target number(s))`);
+      }
+    }
+  } catch (e) {
+    console.log('  [Away] Load from Sheets failed:', e.message);
   }
 }
 
@@ -263,6 +351,44 @@ function initWhatsAppClient() {
     }
   });
 
+  // ===========================================================================
+  // Incoming Message Listener — Away Mode Auto-Reply
+  // ===========================================================================
+  waClient.on('message', async (msg) => {
+    // Ignore status broadcasts, our own messages, and group chats
+    if (msg.isStatus || msg.fromMe || msg.from.endsWith('@g.us')) return;
+
+    // Check if away mode is active
+    if (!awayState.active) return;
+
+    // Check if sender is in the target number list (if list is not empty)
+    const senderPhone = msg.from.replace('@c.us', '');
+    if (awayState.phoneNumbers.length > 0 && !awayState.phoneNumbers.includes(senderPhone)) return;
+
+    // Try brain engine first; fall back to static message
+    let reply = awayState.customMessage;
+    try {
+      const brainResult = awayBrain.processInput(msg.body, {});
+      if (brainResult && brainResult.text) {
+        reply = brainResult.text;
+      }
+    } catch (_) {
+      // If brain engine fails, use the static message
+    }
+
+    console.log(`[Away] Auto-replying to ${senderPhone} (msg: "${msg.body.slice(0, 50)}...")`);
+
+    try {
+      await waClient.sendMessage(msg.from, reply);
+      console.log(`[Away] ✅ Reply sent to ${senderPhone}`);
+
+      // Log conversation for record-keeping
+      logAwayConversation(senderPhone, msg.body, reply);
+    } catch (err) {
+      console.error(`[Away] Failed to reply to ${senderPhone}:`, err.message);
+    }
+  });
+
   waClient.on('authenticated', () => {
     console.log('✅ [WhatsApp] Session authenticated and saved.');
   });
@@ -365,6 +491,7 @@ app.get('/health', (req, res) => {
     hostname: os.hostname(),
     waStatus,
     queueLength: messageQueue.length,
+    awayActive: awayState.active,
     timestamp: new Date().toISOString()
   });
 });
@@ -659,6 +786,44 @@ app.post('/whatsapp/queue/flush', async (req, res) => {
   });
 });
 
+// ============================================================================
+// Away Mode API Endpoints
+// ============================================================================
+
+// GET /away/status — returns current away state
+app.get('/away/status', (req, res) => {
+  res.json({
+    active: awayState.active,
+    phoneNumbers: awayState.phoneNumbers,
+    customMessage: awayState.customMessage,
+  });
+});
+
+// POST /away/toggle — enable or disable away mode
+app.post('/away/toggle', async (req, res) => {
+  const { active, phoneNumbers, customMessage } = req.body;
+
+  awayState.active = active === true || active === 'true';
+  if (Array.isArray(phoneNumbers)) {
+    awayState.phoneNumbers = phoneNumbers;
+  }
+  if (customMessage && typeof customMessage === 'string') {
+    awayState.customMessage = customMessage;
+  }
+
+  console.log(`[Away] Toggled: ${awayState.active ? 'ACTIVE' : 'INACTIVE'} (${awayState.phoneNumbers.length} target number(s))`);
+
+  // Sync to Google Sheets for crash recovery
+  await syncAwayStateToSheets();
+
+  res.json({
+    success: true,
+    active: awayState.active,
+    phoneNumbers: awayState.phoneNumbers,
+    customMessage: awayState.customMessage,
+  });
+});
+
 // Main execute endpoint (existing functionality)
 app.post('/execute', (req, res) => {
   const { command, target, subject, body, to, phone, message } = req.body;
@@ -778,6 +943,9 @@ app._handleWhatsAppSend = async (req, res) => {
 async function start() {
   // Try to load queued messages from Google Sheets backup (if any)
   await loadQueueFromSheets();
+
+  // Try to restore away mode state from Google Sheets (if any)
+  await loadAwayStateFromSheets();
 
   // Initialize WhatsApp client
   initWhatsAppClient();

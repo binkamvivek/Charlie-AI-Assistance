@@ -146,6 +146,43 @@ export class BridgeService {
     }
   }
 
+  // ============================================================================
+  // Away Mode API
+  // ============================================================================
+
+  /**
+   * Get current away mode status from the bridge.
+   */
+  static async getAwayStatus() {
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/away/status`);
+      return await response.json();
+    } catch (err) {
+      return { active: false, phoneNumbers: [], customMessage: '' };
+    }
+  }
+
+  /**
+   * Toggle away mode on the bridge.
+   * @param {boolean} active - true to enable away mode, false to disable
+   * @param {string[]} phoneNumbers - Array of phone numbers to auto-reply to
+   * @param {string} customMessage - Custom auto-reply message
+   */
+  static async setAwayStatus(active, phoneNumbers = [], customMessage = '') {
+    const url = this.getBridgeUrl();
+    try {
+      const response = await fetch(`${url}/away/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active, phoneNumbers, customMessage })
+      });
+      return await response.json();
+    } catch (err) {
+      return { success: false, active: false, error: err.message };
+    }
+  }
+
   /**
    * Poll WhatsApp status until ready, then flush queue and call onReady.
    * Also calls onPoll callback each poll iteration.

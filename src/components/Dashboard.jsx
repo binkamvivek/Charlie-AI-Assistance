@@ -19,6 +19,24 @@ export default function Dashboard() {
   const [cardPayload, setCardPayload] = useState(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [awayMode, setAwayMode] = useState({
+    active: false,
+    phoneNumbers: [],
+    customMessage: 'Vivek is away at the moment, this is Charlie speaking. You can leave your message here, and Vivek will respond when he is back.',
+  });
+
+  // Sync away mode state from bridge on interval
+  const syncAwayState = async () => {
+    const state = await BridgeService.getAwayStatus();
+    if (state && typeof state.active === 'boolean') {
+      setAwayMode(prev => ({
+        ...prev,
+        active: state.active,
+        phoneNumbers: Array.isArray(state.phoneNumbers) ? state.phoneNumbers : prev.phoneNumbers,
+        customMessage: state.customMessage || prev.customMessage,
+      }));
+    }
+  };
 
   // Load initial memory facts & check Desktop Bridge status
   const loadData = async () => {
@@ -34,7 +52,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 15000);
+    syncAwayState();
+    const interval = setInterval(() => {
+      loadData();
+      syncAwayState();
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -56,6 +78,48 @@ export default function Dashboard() {
     // Refresh memory facts in case tools modified them
     const updatedFacts = res.updatedFacts || await SheetsService.getFacts();
     setMemoryFacts(updatedFacts);
+  };
+
+  const handleToggleAway = async () => {
+    const newActive = !awayMode.active;
+    setAwayMode(prev => ({ ...prev, active: newActive }));
+
+    const result = await BridgeService.setAwayStatus(
+      newActive,
+      awayMode.phoneNumbers,
+      awayMode.customMessage
+    );
+
+    if (result.success) {
+      setAwayMode(prev => ({
+        ...prev,
+        active: result.active,
+        phoneNumbers: result.phoneNumbers || prev.phoneNumbers,
+        customMessage: result.customMessage || prev.customMessage,
+      }));
+
+      // Also sync to Sheets for persistence
+      if (newActive) {
+        await SheetsService.syncAwayStateToSheets(
+          true,
+          awayMode.phoneNumbers,
+          awayMode.customMessage
+        );
+      }
+
+      setStatusText(newActive ? 'Away Mode Active — Charlie handling chats' : 'Back — Auto-reply disabled');
+    } else {
+      // Revert on failure
+      setAwayMode(prev => ({ ...prev, active: !newActive }));
+      setStatusText('Failed to toggle away mode');
+    }
+  };
+
+  const handleUpdateAwayConfig = async (phoneNumbers, customMessage) => {
+    setAwayMode(prev => ({ ...prev, phoneNumbers, customMessage }));
+    await BridgeService.setAwayStatus(true, phoneNumbers, customMessage);
+    await SheetsService.syncAwayStateToSheets(true, phoneNumbers, customMessage);
+    setStatusText(`Away mode updated — ${phoneNumbers.length} number(s) configured`);
   };
 
   const handleActionTriggered = (actionMsg) => {
@@ -98,6 +162,9 @@ export default function Dashboard() {
               cardPayload={cardPayload}
               ttsEnabled={ttsEnabled}
               setTtsEnabled={setTtsEnabled}
+              awayMode={awayMode}
+              onToggleAway={handleToggleAway}
+              onUpdateAwayConfig={handleUpdateAwayConfig}
             />
           </div>
 

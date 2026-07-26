@@ -362,8 +362,9 @@ function initWhatsAppClient() {
     if (!awayState.active) return;
 
     // Check if sender is in the target number list (if list is not empty)
-    const senderPhone = msg.from.replace('@c.us', '');
-    if (awayState.phoneNumbers.length > 0 && !awayState.phoneNumbers.includes(senderPhone)) return;
+    const senderPhone = msg.from.replace('@c.us', '').replace(/[^\d]/g, '');
+    const targetNumbers = awayState.phoneNumbers.map(n => n.replace(/[^\d]/g, ''));
+    if (targetNumbers.length > 0 && !targetNumbers.includes(senderPhone)) return;
 
     // Try brain engine first; fall back to static message
     let reply = awayState.customMessage;
@@ -805,7 +806,7 @@ app.post('/away/toggle', async (req, res) => {
 
   awayState.active = active === true || active === 'true';
   if (Array.isArray(phoneNumbers)) {
-    awayState.phoneNumbers = phoneNumbers;
+    awayState.phoneNumbers = phoneNumbers.map(n => n.replace(/[^\d]/g, ''));
   }
   if (customMessage && typeof customMessage === 'string') {
     awayState.customMessage = customMessage;

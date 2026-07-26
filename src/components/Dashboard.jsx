@@ -92,10 +92,11 @@ export default function Dashboard() {
   };
 
   const handleUpdateAwayConfig = async (phoneNumbers, customMessage) => {
-    setAwayMode(prev => ({ ...prev, phoneNumbers, customMessage }));
-    await BridgeService.setAwayStatus(true, phoneNumbers, customMessage);
-    await SheetsService.syncAwayStateToSheets(true, phoneNumbers, customMessage);
-    setStatusText(`Away mode updated — ${phoneNumbers.length} number(s) configured`);
+    const cleanNums = phoneNumbers.map(n => n.replace(/[^\d]/g, ''));
+    setAwayMode(prev => ({ ...prev, phoneNumbers: cleanNums, customMessage }));
+    await BridgeService.setAwayStatus(true, cleanNums, customMessage);
+    await SheetsService.syncAwayStateToSheets(true, cleanNums, customMessage);
+    setStatusText(`Away mode updated — ${cleanNums.length} number(s) configured`);
   };
 
   const handleActionTriggered = (actionMsg) => {

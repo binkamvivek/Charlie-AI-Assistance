@@ -227,9 +227,8 @@ async function flushQueue() {
   while (messageQueue.length > 0) {
     const entry = messageQueue.shift();
     try {
-      // Format phone: remove everything except digits, then add @c.us
       const cleanPhone = entry.phone.replace(/[^\d]/g, '');
-      const chatId = cleanPhone + '@c.us';
+      const chatId = await resolveChatId(cleanPhone);
 
       console.log(`[Queue] Sending to ${chatId}...`);
       const result = await waClient.sendMessage(chatId, entry.message);
@@ -361,10 +360,20 @@ function initWhatsAppClient() {
     // Check if away mode is active
     if (!awayState.active) return;
 
+    // Extract phone number from any chat ID format (@c.us, @lid, @s.whatsapp.net, etc.)
+    const senderRaw = msg.from;
+    const senderPhone = senderRaw.replace(/@.*$/, '').replace(/[^\d]/g, '');
+    const senderDomain = senderRaw.includes('@') ? senderRaw.split('@')[1] : 'none';
+
+    console.log(`[Away] 📩 Incoming from=${senderRaw} (phone=${senderPhone}, domain=${senderDomain}) body="${msg.body.slice(0, 80)}"`);
+
     // Check if sender is in the target number list (if list is not empty)
-    const senderPhone = msg.from.replace('@c.us', '').replace(/[^\d]/g, '');
     const targetNumbers = awayState.phoneNumbers.map(n => n.replace(/[^\d]/g, ''));
-    if (targetNumbers.length > 0 && !targetNumbers.includes(senderPhone)) return;
+    if (targetNumbers.length > 0) {
+      const matched = targetNumbers.includes(senderPhone);
+      console.log(`[Away] Number match check: targetNumbers=[${targetNumbers.join(',')}] includes ${senderPhone}? ${matched}`);
+      if (!matched) return;
+    }
 
     // Try brain engine first; fall back to static message
     let reply = awayState.customMessage;
@@ -377,16 +386,16 @@ function initWhatsAppClient() {
       // If brain engine fails, use the static message
     }
 
-    console.log(`[Away] Auto-replying to ${senderPhone} (msg: "${msg.body.slice(0, 50)}...")`);
+    console.log(`[Away] Auto-replying to ${senderPhone} with "${reply.slice(0, 60)}..."`);
 
     try {
-      await waClient.sendMessage(msg.from, reply);
+      await waClient.sendMessage(senderRaw, reply);
       console.log(`[Away] ✅ Reply sent to ${senderPhone}`);
 
       // Log conversation for record-keeping
       logAwayConversation(senderPhone, msg.body, reply);
     } catch (err) {
-      console.error(`[Away] Failed to reply to ${senderPhone}:`, err.message);
+      console.error(`[Away] ❌ Failed to reply to ${senderPhone}:`, err.message);
     }
   });
 
@@ -671,10 +680,33 @@ app.get('/qr', (req, res) => {
 /**
  * Format phone number for whatsapp-web.js:
  * - Remove all non-digit characters (including +, spaces, dashes)
- * - Append @c.us suffix
+ * - Append @c.us suffix (legacy — kept as fallback)
  */
 function formatPhoneForWA(phone) {
   const digits = phone.replace(/[^\d]/g, '');
+  return digits + '@c.us';
+}
+
+/**
+ * Resolve a phone number to the correct WhatsApp chat ID.
+ * Uses getNumberId() to handle LID users (post-2024 accounts).
+ * Falls back to @c.us format if resolution fails.
+ */
+async function resolveChatId(phone) {
+  const digits = phone.replace(/[^\d]/g, '');
+  if (waClient) {
+    try {
+      const wid = await waClient.getNumberId(digits);
+      if (wid) {
+        const resolved = wid._serialized || wid.toString();
+        console.log(`[WhatsApp] Resolved ${digits} -> ${resolved}`);
+        return resolved;
+      }
+    } catch (err) {
+      console.log(`[WhatsApp] getNumberId failed for ${digits}, falling back to @c.us: ${err.message}`);
+    }
+  }
+  console.log(`[WhatsApp] Using @c.us fallback for ${digits}`);
   return digits + '@c.us';
 }
 
@@ -695,7 +727,7 @@ app.post('/whatsapp/send', async (req, res) => {
     });
   }
 
-  const chatId = formatPhoneForWA(phone);
+  const chatId = await resolveChatId(phone);
 
   console.log(`[WhatsApp] Sending message to ${chatId} in background...`);
 
@@ -730,7 +762,7 @@ app.post('/whatsapp/send-or-queue', async (req, res) => {
 
   // If ready, send immediately
   if (waStatus === 'ready') {
-    const chatId = formatPhoneForWA(phone);
+    const chatId = await resolveChatId(phone);
 
     try {
       const sent = await waClient.sendMessage(chatId, message);
@@ -914,7 +946,7 @@ app._handleWhatsAppSend = async (req, res) => {
     });
   }
 
-  const chatId = formatPhoneForWA(phone);
+  const chatId = await resolveChatId(phone);
 
   console.log(`[WhatsApp] Sending message to ${chatId} in background...`);
 

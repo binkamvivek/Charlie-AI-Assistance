@@ -38,6 +38,7 @@ const messageQueue = []; // Array of { phone, message, timestamp }
 let awayState = {
   active: false,
   phoneNumbers: [],
+  resolvedIds: [],
   customMessage: 'Vivek is away at the moment, this is Charlie speaking. You can leave your message here, and Vivek will respond when he is back.',
 };
 
@@ -155,6 +156,7 @@ async function syncAwayStateToSheets() {
       value: awayState.active ? 'true' : 'false',
       details: JSON.stringify({
         phoneNumbers: awayState.phoneNumbers,
+        resolvedIds: awayState.resolvedIds,
         customMessage: awayState.customMessage,
       }),
       _t: Date.now()
@@ -184,10 +186,11 @@ async function loadAwayStateFromSheets() {
       awayState = {
         active,
         phoneNumbers: Array.isArray(details.phoneNumbers) ? details.phoneNumbers : [],
+        resolvedIds: Array.isArray(details.resolvedIds) ? details.resolvedIds : [],
         customMessage: details.customMessage || awayState.customMessage,
       };
       if (active) {
-        console.log(`[Away] Restored away mode: ACTIVE (${awayState.phoneNumbers.length} target number(s))`);
+        console.log(`[Away] Restored away mode: ACTIVE (${awayState.phoneNumbers.length} target number(s), ${awayState.resolvedIds.length} resolved ID(s))`);
       }
     }
   } catch (e) {
@@ -360,35 +363,14 @@ function initWhatsAppClient() {
     // Check if away mode is active
     if (!awayState.active) return;
 
-    // Extract phone number: resolve via contact (handles LID) or fall back to raw digits
     const senderRaw = msg.from;
-    const senderDomain = senderRaw.includes('@') ? senderRaw.split('@')[1] : 'none';
-    let senderPhone = null;
 
-    if (senderDomain === 'lid') {
-      try {
-        const contact = await msg.getContact();
-        if (contact && contact.number) {
-          senderPhone = contact.number.replace(/[^\d]/g, '');
-          console.log(`[Away] Resolved LID ${senderRaw} -> phone=${senderPhone}, name=${contact.name || contact.pushname || 'unknown'}`);
-        }
-      } catch (err) {
-        console.log(`[Away] getContact failed for ${senderRaw}: ${err.message}`);
-      }
-    }
+    console.log(`[Away] 📩 Incoming from=${senderRaw} body="${msg.body.slice(0, 80)}"`);
 
-    if (!senderPhone) {
-      senderPhone = senderRaw.replace(/@.*$/, '').replace(/[^\d]/g, '');
-      console.log(`[Away] Using raw ID: ${senderRaw} -> ${senderPhone}`);
-    }
-
-    console.log(`[Away] 📩 Incoming from=${senderRaw} (phone=${senderPhone}, domain=${senderDomain}) body="${msg.body.slice(0, 80)}"`);
-
-    // Check if sender is in the target number list (if list is not empty)
-    const targetNumbers = awayState.phoneNumbers.map(n => n.replace(/[^\d]/g, ''));
-    if (targetNumbers.length > 0) {
-      const matched = targetNumbers.includes(senderPhone);
-      console.log(`[Away] Number match check: targetNumbers=[${targetNumbers.join(',')}] includes ${senderPhone}? ${matched}`);
+    // Check if sender's chat ID is in the pre-resolved target list (handles @lid + @c.us)
+    if (awayState.resolvedIds.length > 0) {
+      const matched = awayState.resolvedIds.includes(senderRaw);
+      console.log(`[Away] ID match check: resolvedIds=[${awayState.resolvedIds.join(',')}] includes ${senderRaw}? ${matched}`);
       if (!matched) return;
     }
 
@@ -403,16 +385,16 @@ function initWhatsAppClient() {
       // If brain engine fails, use the static message
     }
 
-    console.log(`[Away] Auto-replying to ${senderPhone} with "${reply.slice(0, 60)}..."`);
+    console.log(`[Away] Auto-replying to ${senderRaw} with "${reply.slice(0, 60)}..."`);
 
     try {
       await waClient.sendMessage(senderRaw, reply);
-      console.log(`[Away] ✅ Reply sent to ${senderPhone}`);
+      console.log(`[Away] ✅ Reply sent to ${senderRaw}`);
 
       // Log conversation for record-keeping
-      logAwayConversation(senderPhone, msg.body, reply);
+      logAwayConversation(senderRaw, msg.body, reply);
     } catch (err) {
-      console.error(`[Away] ❌ Failed to reply to ${senderPhone}:`, err.message);
+      console.error(`[Away] ❌ Failed to reply to ${senderRaw}:`, err.message);
     }
   });
 
@@ -861,7 +843,19 @@ app.post('/away/toggle', async (req, res) => {
     awayState.customMessage = customMessage;
   }
 
-  console.log(`[Away] Toggled: ${awayState.active ? 'ACTIVE' : 'INACTIVE'} (${awayState.phoneNumbers.length} target number(s))`);
+  // Resolve phone numbers to WhatsApp chat IDs (handles @lid for post-2024 accounts)
+  awayState.resolvedIds = [];
+  for (const num of awayState.phoneNumbers) {
+    try {
+      const chatId = await resolveChatId(num);
+      awayState.resolvedIds.push(chatId);
+      console.log(`[Away] Resolved ${num} -> ${chatId}`);
+    } catch (err) {
+      console.log(`[Away] Failed to resolve ${num}: ${err.message}`);
+    }
+  }
+
+  console.log(`[Away] Toggled: ${awayState.active ? 'ACTIVE' : 'INACTIVE'} (${awayState.phoneNumbers.length} target number(s), ${awayState.resolvedIds.length} resolved ID(s))`);
 
   // Sync to Google Sheets for crash recovery
   await syncAwayStateToSheets();

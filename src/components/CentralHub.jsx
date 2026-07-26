@@ -122,13 +122,13 @@ export default function CentralHub({ onSendMessage, status, currentResponse, car
     }
   }, [currentResponse, ttsEnabled]);
 
-  // Sync away config inputs when away mode state changes
+  // Initialize away config inputs when panel opens with saved values
   useEffect(() => {
-    if (awayMode.active) {
+    if (showAwayConfig && awayMode.phoneNumbers.length > 0) {
       setAwayPhoneInput(awayMode.phoneNumbers.join(', '));
       setAwayMessageInput(awayMode.customMessage || '');
     }
-  }, [awayMode.active, awayMode.phoneNumbers, awayMode.customMessage]);
+  }, [showAwayConfig]);
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
@@ -162,58 +162,46 @@ export default function CentralHub({ onSendMessage, status, currentResponse, car
           <Activity className="w-4 h-4 text-sky-400" />
           <span className="text-slate-300 font-semibold">{status}</span>
         </div>
-        <button
-          onClick={() => setTtsEnabled(!ttsEnabled)}
-          className={`flex items-center gap-1-5 px-3 py-1 rounded-full border transition-all ${
-            ttsEnabled ? 'border-sky-500-50 bg-sky-500-10 text-sky-400' : 'border-slate-800 bg-slate-900 text-slate-500'
-          }`}
-        >
-          {ttsEnabled ? <Volume2 className="w-3-5 h-3-5" /> : <VolumeX className="w-3-5 h-3-5" />}
-          <span>{ttsEnabled ? 'Voice On' : 'Mute Voice'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTtsEnabled(!ttsEnabled)}
+            className={`flex items-center gap-1-5 px-3 py-1 rounded-full border transition-all ${
+              ttsEnabled ? 'border-sky-500-50 bg-sky-500-10 text-sky-400' : 'border-slate-800 bg-slate-900 text-slate-500'
+            }`}
+          >
+            {ttsEnabled ? <Volume2 className="w-3-5 h-3-5" /> : <VolumeX className="w-3-5 h-3-5" />}
+            <span>{ttsEnabled ? 'Voice On' : 'Mute Voice'}</span>
+          </button>
+
+          <button
+            onClick={onToggleAway}
+            className={`flex items-center gap-1-5 px-3 py-1 rounded-full border transition-all ${
+              awayMode.active ? 'border-amber-500-50 bg-amber-500-10 text-amber-400' : 'border-emerald-500-30 bg-emerald-500-10 text-emerald-400'
+            }`}
+          >
+            {awayMode.active ? <Moon className="w-3-5 h-3-5" /> : <Sun className="w-3-5 h-3-5" />}
+            <span>{awayMode.active ? 'Away' : 'Back'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Glowing Floating Central Node + Away Toggle */}
+      {/* Glowing Floating Central Node */}
       <div className="my-6 flex flex-col items-center gap-4">
-        <div className="flex items-center gap-6">
-          {/* Voice Button */}
-          <div
-            onClick={toggleListening}
-            className={`glow-orb ${isListening ? 'listening' : status.includes('Executing') ? 'thinking' : ''}`}
-            title={isListening ? 'Click to stop listening' : 'Click to speak to Charlie'}
-          >
-            {isListening ? (
-              <MicOff className="w-10 h-10 text-white" />
-            ) : (
-              <Mic className="w-10 h-10 text-white" />
-            )}
-          </div>
-
-          {/* Away/Back Toggle Button */}
-          <div className="flex flex-col items-center gap-1">
-            <div
-              onClick={onToggleAway}
-              className={`glow-orb away-orb ${awayMode.active ? 'away-on' : 'away-off'}`}
-              title={awayMode.active ? 'Click to come back (disable auto-reply)' : 'Click to go away (enable auto-reply)'}
-            >
-              {awayMode.active ? (
-                <Moon className="w-7 h-7 text-white" />
-              ) : (
-                <Sun className="w-7 h-7 text-white" />
-              )}
-            </div>
-            <span className={`text-xs font-bold font-mono tracking-wider ${awayMode.active ? 'text-amber-400' : 'text-emerald-400'}`}>
-              {awayMode.active ? 'AWAY' : 'BACK'}
-            </span>
-          </div>
+        {/* Voice Button */}
+        <div
+          onClick={toggleListening}
+          className={`glow-orb ${isListening ? 'listening' : status.includes('Executing') ? 'thinking' : ''}`}
+          title={isListening ? 'Click to stop listening' : 'Click to speak to Charlie'}
+        >
+          {isListening ? (
+            <MicOff className="w-10 h-10 text-white" />
+          ) : (
+            <Mic className="w-10 h-10 text-white" />
+          )}
         </div>
 
         <p className="text-xs font-mono text-slate-400">
-          {awayMode.active
-            ? 'Away mode ON — Charlie is handling conversations'
-            : isListening
-              ? 'Listening... Speak now'
-              : 'Click glowing node or type below'}
+          {isListening ? 'Listening... Speak now' : 'Click glowing node or type below'}
         </p>
 
         {/* Away Mode Config Panel */}

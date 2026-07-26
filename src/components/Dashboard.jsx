@@ -80,38 +80,14 @@ export default function Dashboard() {
     setMemoryFacts(updatedFacts);
   };
 
-  const handleToggleAway = async () => {
+  const handleToggleAway = () => {
     const newActive = !awayMode.active;
     setAwayMode(prev => ({ ...prev, active: newActive }));
+    setStatusText(newActive ? 'Away Mode Active' : 'Back — Auto-reply disabled');
 
-    const result = await BridgeService.setAwayStatus(
-      newActive,
-      awayMode.phoneNumbers,
-      awayMode.customMessage
-    );
-
-    if (result.success) {
-      setAwayMode(prev => ({
-        ...prev,
-        active: result.active,
-        phoneNumbers: result.phoneNumbers || prev.phoneNumbers,
-        customMessage: result.customMessage || prev.customMessage,
-      }));
-
-      // Also sync to Sheets for persistence
-      if (newActive) {
-        await SheetsService.syncAwayStateToSheets(
-          true,
-          awayMode.phoneNumbers,
-          awayMode.customMessage
-        );
-      }
-
-      setStatusText(newActive ? 'Away Mode Active — Charlie handling chats' : 'Back — Auto-reply disabled');
-    } else {
-      // Revert on failure
-      setAwayMode(prev => ({ ...prev, active: !newActive }));
-      setStatusText('Failed to toggle away mode');
+    BridgeService.setAwayStatus(newActive, awayMode.phoneNumbers, awayMode.customMessage);
+    if (newActive) {
+      SheetsService.syncAwayStateToSheets(true, awayMode.phoneNumbers, awayMode.customMessage);
     }
   };
 

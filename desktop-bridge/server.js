@@ -360,10 +360,27 @@ function initWhatsAppClient() {
     // Check if away mode is active
     if (!awayState.active) return;
 
-    // Extract phone number from any chat ID format (@c.us, @lid, @s.whatsapp.net, etc.)
+    // Extract phone number: resolve via contact (handles LID) or fall back to raw digits
     const senderRaw = msg.from;
-    const senderPhone = senderRaw.replace(/@.*$/, '').replace(/[^\d]/g, '');
     const senderDomain = senderRaw.includes('@') ? senderRaw.split('@')[1] : 'none';
+    let senderPhone = null;
+
+    if (senderDomain === 'lid') {
+      try {
+        const contact = await msg.getContact();
+        if (contact && contact.number) {
+          senderPhone = contact.number.replace(/[^\d]/g, '');
+          console.log(`[Away] Resolved LID ${senderRaw} -> phone=${senderPhone}, name=${contact.name || contact.pushname || 'unknown'}`);
+        }
+      } catch (err) {
+        console.log(`[Away] getContact failed for ${senderRaw}: ${err.message}`);
+      }
+    }
+
+    if (!senderPhone) {
+      senderPhone = senderRaw.replace(/@.*$/, '').replace(/[^\d]/g, '');
+      console.log(`[Away] Using raw ID: ${senderRaw} -> ${senderPhone}`);
+    }
 
     console.log(`[Away] 📩 Incoming from=${senderRaw} (phone=${senderPhone}, domain=${senderDomain}) body="${msg.body.slice(0, 80)}"`);
 

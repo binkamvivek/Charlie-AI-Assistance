@@ -31,7 +31,7 @@ export default function Dashboard() {
     if (state && typeof state.active === 'boolean') {
       setAwayMode(prev => ({
         ...prev,
-        active: state.active,
+        active: state.active || prev.active,
         phoneNumbers: Array.isArray(state.phoneNumbers) ? state.phoneNumbers : prev.phoneNumbers,
         customMessage: state.customMessage || prev.customMessage,
       }));
